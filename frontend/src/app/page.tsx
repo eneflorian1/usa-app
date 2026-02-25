@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Link from 'next/link';
 
 interface Booking {
   _id: string;
@@ -9,224 +10,164 @@ interface Booking {
   checkOut: string;
 }
 
-export default function Home() {
-  const [date, setDate] = useState(new Date());
-  const [bookings, setBookings] = useState<Booking[]>([]);
-  const [selectedDay, setSelectedDay] = useState<number | null>(null);
-  const [loading, setLoading] = useState(false);
+interface Task {
+  _id: string;
+  title: string;
+  priority: string;
+  completed: boolean;
+  dueDate: string | null;
+}
 
-  const year = date.getFullYear();
-  const month = date.getMonth();
+interface Escalation {
+  _id: string;
+  reason: string;
+  status: string;
+  createdAt: string;
+}
+
+export default function Home() {
+  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [escalations, setEscalations] = useState<Escalation[]>([]);
 
   useEffect(() => {
-    fetchBookings();
-  }, [year, month]);
+    const now = new Date();
+    fetch(`/api/bookings/${now.getFullYear()}/${now.getMonth() + 1}`)
+      .then(r => r.json()).then(d => { if (Array.isArray(d)) setBookings(d); }).catch(() => { });
+    fetch('/api/planner/tasks')
+      .then(r => r.json()).then(d => { if (Array.isArray(d)) setTasks(d); }).catch(() => { });
+    fetch('/api/escalations')
+      .then(r => r.json()).then(d => { if (Array.isArray(d)) setEscalations(d); }).catch(() => { });
+  }, []);
 
-  const fetchBookings = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/bookings/${year}/${month + 1}`);
-      const data = await res.json();
-      if (Array.isArray(data)) setBookings(data);
-    } catch (err) {
-      console.error('Failed to fetch bookings:', err);
-    }
-    setLoading(false);
-  };
-
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const firstDayOfMonth = new Date(year, month, 1).getDay();
-
-  const handlePrevMonth = () => {
-    setDate(new Date(year, month - 1, 1));
-    setSelectedDay(null);
-  };
-
-  const handleNextMonth = () => {
-    setDate(new Date(year, month + 1, 1));
-    setSelectedDay(null);
-  };
-
-  const getBookingsForDay = (day: number) => {
-    const dayStart = new Date(year, month, day, 0, 0, 0);
-    const dayEnd = new Date(year, month, day, 23, 59, 59);
-    return bookings.filter(b => {
-      const ci = new Date(b.checkIn);
-      const co = new Date(b.checkOut);
-      return ci <= dayEnd && co >= dayStart;
-    });
-  };
-
-  const isToday = (day: number) => {
+  const todayBookings = bookings.filter(b => {
     const today = new Date();
-    return day === today.getDate() && month === today.getMonth() && year === today.getFullYear();
-  };
+    const ci = new Date(b.checkIn);
+    const co = new Date(b.checkOut);
+    const dayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const dayEnd = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59);
+    return ci <= dayEnd && co >= dayStart;
+  });
 
-  const handleDeleteBooking = async (id: string) => {
-    if (!confirm('Sigur vrei să anulezi această rezervare?')) return;
-    try {
-      await fetch(`/api/bookings/${id}`, { method: 'DELETE' });
-      fetchBookings();
-    } catch (err) {
-      console.error('Failed to delete booking:', err);
-    }
-  };
+  const activeTasks = tasks.filter(t => !t.completed);
+  const pendingEscalations = escalations.filter(e => e.status === 'pending');
 
-  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const dayNamesShort = ['D', 'L', 'M', 'M', 'J', 'V', 'S'];
-
-  const selectedBookings = selectedDay ? getBookingsForDay(selectedDay) : [];
-
-  const renderCalendar = () => {
-    const calendarDays = [];
-
-    for (let i = 0; i < firstDayOfMonth; i++) {
-      calendarDays.push(
-        <div key={`empty-${i}`} className="rounded-lg min-h-[2.5rem] md:min-h-[5rem]"></div>
-      );
-    }
-
-    for (let day = 1; day <= daysInMonth; day++) {
-      const dayBookings = getBookingsForDay(day);
-      const hasBookings = dayBookings.length > 0;
-      const today = isToday(day);
-      const isSelected = selectedDay === day;
-
-      calendarDays.push(
-        <div
-          key={day}
-          onClick={() => setSelectedDay(day === selectedDay ? null : day)}
-          className={`
-            rounded-lg p-1 md:p-2 min-h-[2.5rem] md:min-h-[5rem] cursor-pointer transition-all duration-200 border
-            ${isSelected
-              ? 'bg-blue-50 dark:bg-blue-900/40 border-blue-500 ring-2 ring-blue-400/50 shadow-md'
-              : today
-                ? 'bg-gradient-to-br from-blue-50 to-purple-50 dark:from-blue-950/30 dark:to-purple-950/30 border-blue-300 dark:border-blue-700'
-                : 'bg-white dark:bg-zinc-900 border-gray-200 dark:border-zinc-800 hover:border-blue-300 dark:hover:border-blue-700 hover:shadow-sm'
-            }
-          `}
-        >
-          <div className="flex items-center justify-between">
-            <span className={`
-              text-xs md:text-sm font-semibold
-              ${today ? 'text-blue-600 dark:text-blue-400' : 'text-gray-700 dark:text-gray-300'}
-            `}>
-              {day}
-            </span>
-            {hasBookings && (
-              <span className="flex gap-0.5">
-                {dayBookings.slice(0, 3).map((_, idx) => (
-                  <span key={idx} className="w-1.5 h-1.5 md:w-2 md:h-2 rounded-full bg-emerald-500 inline-block" />
-                ))}
-              </span>
-            )}
-          </div>
-          {/* Desktop: show booking names */}
-          <div className="hidden md:block mt-1 space-y-0.5">
-            {dayBookings.slice(0, 2).map((b) => (
-              <div key={b._id} className="text-[10px] bg-emerald-100 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-300 rounded px-1 py-0.5 truncate font-medium">
-                {b.guestName}
-              </div>
-            ))}
-            {dayBookings.length > 2 && (
-              <div className="text-[10px] text-gray-400">+{dayBookings.length - 2} more</div>
-            )}
-          </div>
-        </div>
-      );
-    }
-
-    return calendarDays;
-  };
-
-  const formatDateTime = (dateStr: string) => {
-    const d = new Date(dateStr);
-    return d.toLocaleDateString('ro-RO', { day: 'numeric', month: 'short', year: 'numeric' }) +
-      ', ' + d.toLocaleTimeString('ro-RO', { hour: '2-digit', minute: '2-digit' });
-  };
+  const statCards = [
+    {
+      title: 'Today\'s Bookings',
+      value: todayBookings.length,
+      icon: '🏨',
+      color: 'from-emerald-500 to-teal-600',
+      link: '/calendar'
+    },
+    {
+      title: 'Active Tasks',
+      value: activeTasks.length,
+      icon: '📋',
+      color: 'from-violet-500 to-purple-600',
+      link: '/planner'
+    },
+    {
+      title: 'Pending Alerts',
+      value: pendingEscalations.length,
+      icon: '🔔',
+      color: 'from-amber-500 to-orange-600',
+      link: '/notifications'
+    },
+    {
+      title: 'Total Bookings',
+      value: bookings.length,
+      icon: '📊',
+      color: 'from-blue-500 to-indigo-600',
+      link: '/calendar'
+    },
+  ];
 
   return (
-    <div className="h-full flex flex-col gap-4 md:gap-6">
+    <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+      <div>
         <h1 className="text-2xl md:text-3xl font-bold tracking-tight bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-          Reservations
+          Dashboard
         </h1>
-        <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
-          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block" />
-          <span>Booked</span>
-        </div>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Welcome back. Here&apos;s your overview.</p>
       </div>
 
-      {/* Calendar Card */}
-      <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-lg border border-gray-200 dark:border-zinc-800 overflow-hidden">
-        {/* Month Navigation */}
-        <div className="flex justify-between items-center px-4 md:px-6 py-3 md:py-4 bg-gradient-to-r from-blue-600 to-purple-600">
-          <button onClick={handlePrevMonth} className="text-white/80 hover:text-white p-1.5 md:p-2 rounded-lg hover:bg-white/10 transition-colors">
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
-          </button>
-          <h2 className="text-base md:text-lg font-bold text-white tracking-wide">
-            {date.toLocaleString('default', { month: 'long', year: 'numeric' })}
-          </h2>
-          <button onClick={handleNextMonth} className="text-white/80 hover:text-white p-1.5 md:p-2 rounded-lg hover:bg-white/10 transition-colors">
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6" /></svg>
-          </button>
-        </div>
-
-        {/* Day Names */}
-        <div className="grid grid-cols-7 text-center border-b border-gray-100 dark:border-zinc-800">
-          {dayNames.map((name, idx) => (
-            <div key={name + idx} className="py-2 md:py-3">
-              <span className="hidden md:inline text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">{name}</span>
-              <span className="md:hidden text-xs font-semibold text-gray-500 dark:text-gray-400">{dayNamesShort[idx]}</span>
+      {/* Stats Grid */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
+        {statCards.map((card) => (
+          <Link key={card.title} href={card.link}
+            className="bg-white dark:bg-zinc-900 rounded-2xl border border-gray-200 dark:border-zinc-800 p-4 hover:shadow-lg transition-all group">
+            <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${card.color} flex items-center justify-center text-lg mb-3 group-hover:scale-110 transition-transform`}>
+              {card.icon}
             </div>
+            <p className="text-2xl md:text-3xl font-bold">{card.value}</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{card.title}</p>
+          </Link>
+        ))}
+      </div>
+
+      {/* Quick Actions */}
+      <div className="bg-white dark:bg-zinc-900 rounded-2xl border border-gray-200 dark:border-zinc-800 p-4 md:p-6">
+        <h2 className="font-semibold text-sm mb-3">Quick Actions</h2>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          {[
+            { label: 'Command Center', href: '/orchestrator', icon: '🧠', desc: 'AI Orchestrator' },
+            { label: 'New Booking', href: '/agent', icon: '➕', desc: 'Via Booking Agent' },
+            { label: 'Plan Tasks', href: '/planner', icon: '📝', desc: 'AI Planner' },
+            { label: 'View Calendar', href: '/calendar', icon: '📅', desc: 'Reservations' },
+          ].map((action) => (
+            <Link key={action.label} href={action.href}
+              className="flex flex-col items-center p-3 rounded-xl hover:bg-gray-50 dark:hover:bg-zinc-800 transition-colors text-center group">
+              <span className="text-2xl mb-1 group-hover:scale-110 transition-transform">{action.icon}</span>
+              <span className="text-xs font-semibold">{action.label}</span>
+              <span className="text-[10px] text-gray-400">{action.desc}</span>
+            </Link>
           ))}
         </div>
-
-        {/* Calendar Grid */}
-        <div className="grid grid-cols-7 gap-1 md:gap-2 p-2 md:p-4">
-          {renderCalendar()}
-        </div>
       </div>
 
-      {/* Selected Day Details */}
-      {selectedDay && (
-        <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-lg border border-gray-200 dark:border-zinc-800 overflow-hidden animate-in slide-in-from-top-2">
-          <div className="px-4 md:px-6 py-3 md:py-4 border-b border-gray-100 dark:border-zinc-800 flex items-center justify-between">
-            <h3 className="font-bold text-base md:text-lg">
-              {selectedDay} {date.toLocaleString('default', { month: 'long' })} {year}
-            </h3>
-            <button onClick={() => setSelectedDay(null)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 p-1">
-              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
-            </button>
+      {/* Today's Bookings */}
+      {todayBookings.length > 0 && (
+        <div className="bg-white dark:bg-zinc-900 rounded-2xl border border-gray-200 dark:border-zinc-800 overflow-hidden">
+          <div className="px-4 md:px-6 py-3 border-b border-gray-100 dark:border-zinc-800 flex items-center justify-between">
+            <h2 className="font-semibold text-sm">Today&apos;s Guests</h2>
+            <Link href="/calendar" className="text-xs text-blue-500 hover:text-blue-600">View all →</Link>
           </div>
-          <div className="p-4 md:p-6">
-            {selectedBookings.length === 0 ? (
-              <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-4">
-                No reservations for this day.
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {selectedBookings.map((b) => (
-                  <div key={b._id} className="flex items-start justify-between bg-gray-50 dark:bg-zinc-800/50 rounded-xl p-3 md:p-4">
-                    <div className="flex-1 min-w-0">
-                      <p className="font-semibold text-sm md:text-base truncate">{b.guestName}</p>
-                      <div className="flex flex-col sm:flex-row sm:gap-4 text-xs md:text-sm text-gray-500 dark:text-gray-400 mt-1">
-                        <span>📥 Check-in: {formatDateTime(b.checkIn)}</span>
-                        <span>📤 Check-out: {formatDateTime(b.checkOut)}</span>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => handleDeleteBooking(b._id)}
-                      className="ml-2 text-red-400 hover:text-red-600 transition-colors p-1 flex-shrink-0"
-                      title="Cancel booking"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" /></svg>
-                    </button>
-                  </div>
-                ))}
+          <div className="divide-y divide-gray-100 dark:divide-zinc-800">
+            {todayBookings.slice(0, 5).map(b => (
+              <div key={b._id} className="px-4 md:px-6 py-3 flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium">{b.guestName}</p>
+                  <p className="text-xs text-gray-400">
+                    {new Date(b.checkIn).toLocaleTimeString('ro-RO', { hour: '2-digit', minute: '2-digit' })} →{' '}
+                    {new Date(b.checkOut).toLocaleTimeString('ro-RO', { hour: '2-digit', minute: '2-digit' })}
+                  </p>
+                </div>
+                <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300 font-medium">Active</span>
               </div>
-            )}
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Active Tasks Preview */}
+      {activeTasks.length > 0 && (
+        <div className="bg-white dark:bg-zinc-900 rounded-2xl border border-gray-200 dark:border-zinc-800 overflow-hidden">
+          <div className="px-4 md:px-6 py-3 border-b border-gray-100 dark:border-zinc-800 flex items-center justify-between">
+            <h2 className="font-semibold text-sm">Active Tasks</h2>
+            <Link href="/planner" className="text-xs text-violet-500 hover:text-violet-600">Manage →</Link>
+          </div>
+          <div className="divide-y divide-gray-100 dark:divide-zinc-800">
+            {activeTasks.slice(0, 4).map(t => (
+              <div key={t._id} className="px-4 md:px-6 py-3 flex items-center justify-between">
+                <p className="text-sm">{t.title}</p>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${t.priority === 'high' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+                    : t.priority === 'medium' ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400'
+                      : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+                  }`}>{t.priority}</span>
+              </div>
+            ))}
           </div>
         </div>
       )}

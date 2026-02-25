@@ -62,6 +62,14 @@ const Booking = mongoose.model('Booking', BookingSchema);
 
 const AgentChatSchema = new mongoose.Schema({
   sessionId: { type: String, default: 'default' },
+  agentType: { type: String, default: 'general' },
+  userProfile: {
+    name: String,
+    phone: String,
+    preferences: [String],
+    notes: String
+  },
+  summary: { type: String, default: '' },
   messages: [{
     role: { type: String, enum: ['user', 'model'] },
     content: String,
@@ -70,6 +78,30 @@ const AgentChatSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }
 });
 const AgentChat = mongoose.model('AgentChat', AgentChatSchema);
+
+const KnowledgeEntrySchema = new mongoose.Schema({
+  category: { type: String, required: true },
+  key: { type: String, required: true },
+  value: { type: String, required: true },
+  tags: [String],
+  availableTo: { type: String, default: 'all' },
+  source: { type: String, default: 'manual' },
+  updatedAt: { type: Date, default: Date.now }
+});
+KnowledgeEntrySchema.index({ key: 'text', value: 'text', category: 'text' });
+const KnowledgeEntry = mongoose.model('KnowledgeEntry', KnowledgeEntrySchema);
+
+const EscalationSchema = new mongoose.Schema({
+  reason: { type: String, required: true },
+  context: String,
+  chatHistory: [{ role: String, content: String }],
+  sessionId: String,
+  agentType: String,
+  status: { type: String, enum: ['pending', 'handled'], default: 'pending' },
+  priority: { type: String, enum: ['low', 'medium', 'high', 'critical'], default: 'medium' },
+  createdAt: { type: Date, default: Date.now }
+});
+const Escalation = mongoose.model('Escalation', EscalationSchema);
 
 const PlannerTaskSchema = new mongoose.Schema({
   title: { type: String, required: true },
@@ -278,6 +310,70 @@ app.delete('/api/agent/chat/history', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+// Knowledge Base Routes
+app.get('/api/knowledge', async (req, res) => {
+  try {
+    const entries = await KnowledgeEntry.find().sort({ category: 1, key: 1 });
+    res.json(entries);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/knowledge/search', async (req, res) => {
+  try {
+    const { q, category } = req.query;
+    const { searchKnowledge } = require('./knowledgeService');
+    const entries = await searchKnowledge(q, category);
+    res.json(entries);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/knowledge', async (req, res) => {
+  try {
+    const entry = await KnowledgeEntry.create(req.body);
+    res.status(201).json(entry);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/knowledge/bulk', async (req, res) => {
+  try {
+    const { entries } = req.body;
+    if (!Array.isArray(entries)) return res.status(400).json({ error: 'entries must be an array' });
+    const created = await KnowledgeEntry.insertMany(entries);
+    res.status(201).json({ count: created.length, entries: created });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/knowledge/:id', async (req, res) => {
+  try {
+    const entry = await KnowledgeEntry.findByIdAndUpdate(req.params.id, { ...req.body, updatedAt: Date.now() }, { new: true });
+    if (!entry) return res.status(404).json({ error: 'Entry not found' });
+    res.json(entry);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/knowledge/:id', async (req, res) => {
+  try {
+    const entry = await KnowledgeEntry.findByIdAndDelete(req.params.id);
+    if (!entry) return res.status(404).json({ error: 'Entry not found' });
+    res.json({ message: 'Entry deleted' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Escalation Routes
+app.get('/api/escalations', async (req, res) => {
+  try {
+    const escalations = await Escalation.find().sort({ createdAt: -1 });
+    res.json(escalations);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/api/escalations/:id', async (req, res) => {
+  try {
+    const esc = await Escalation.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    if (!esc) return res.status(404).json({ error: 'Escalation not found' });
+    res.json(esc);
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // Planner Task CRUD Routes
