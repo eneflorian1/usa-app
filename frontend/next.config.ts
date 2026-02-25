@@ -1,6 +1,12 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  allowedDevOrigins: ['enef.site', '*.enef.site'],
+  // @ts-ignore
+  turbopack: {
+    // @ts-ignore
+    root: '..',
+  },
   async rewrites() {
     return [
       {

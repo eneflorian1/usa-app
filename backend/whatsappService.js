@@ -24,7 +24,7 @@ function initializeWhatsApp() {
     client = new Client({
         authStrategy: new LocalAuth(),
         puppeteer: {
-            dumpio: true,
+            dumpio: false,
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -34,7 +34,10 @@ function initializeWhatsApp() {
                 '--no-zygote',
                 '--disable-gpu',
                 '--disable-features=site-per-process',
-                '--disable-dbus'
+                '--disable-dbus',
+                '--disable-notifications',
+                '--disable-component-update',
+                '--disable-background-networking'
             ]
         }
     });
