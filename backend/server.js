@@ -3,6 +3,8 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 require('dotenv').config();
 
+const { processAgentMessage } = require('./agentChatService');
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 
@@ -47,6 +49,25 @@ const ConversationSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }
 });
 const Conversation = mongoose.model('Conversation', ConversationSchema);
+
+const BookingSchema = new mongoose.Schema({
+  guestName: { type: String, required: true },
+  checkIn: { type: Date, required: true },
+  checkOut: { type: Date, required: true },
+  createdAt: { type: Date, default: Date.now }
+});
+const Booking = mongoose.model('Booking', BookingSchema);
+
+const AgentChatSchema = new mongoose.Schema({
+  sessionId: { type: String, default: 'default' },
+  messages: [{
+    role: { type: String, enum: ['user', 'model'] },
+    content: String,
+    timestamp: { type: Date, default: Date.now }
+  }],
+  updatedAt: { type: Date, default: Date.now }
+});
+const AgentChat = mongoose.model('AgentChat', AgentChatSchema);
 
 // API Routes
 app.get('/api/agent/config', async (req, res) => {
@@ -106,7 +127,7 @@ app.post('/api/settings/gemini', async (req, res) => {
   try {
     const { apiKey } = req.body;
     if (!apiKey) return res.status(400).json({ error: 'API Key is required' });
-    
+
     await Setting.findOneAndUpdate(
       { key: 'gemini_api_key' },
       { value: apiKey, updatedAt: Date.now() },
@@ -137,6 +158,111 @@ app.post('/api/items', async (req, res) => {
     const newItem = new Item({ name });
     await newItem.save();
     res.status(201).json(newItem);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Booking Routes
+app.get('/api/bookings', async (req, res) => {
+  try {
+    const bookings = await Booking.find().sort({ checkIn: 1 });
+    res.json(bookings);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/bookings/:year/:month', async (req, res) => {
+  try {
+    const { year, month } = req.params;
+    const startDate = new Date(parseInt(year), parseInt(month) - 1, 1);
+    const endDate = new Date(parseInt(year), parseInt(month), 0, 23, 59, 59);
+    const bookings = await Booking.find({
+      $or: [
+        { checkIn: { $gte: startDate, $lte: endDate } },
+        { checkOut: { $gte: startDate, $lte: endDate } },
+        { checkIn: { $lte: startDate }, checkOut: { $gte: endDate } }
+      ]
+    }).sort({ checkIn: 1 });
+    res.json(bookings);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/bookings', async (req, res) => {
+  try {
+    const { guestName, checkIn, checkOut } = req.body;
+    if (!guestName || !checkIn || !checkOut) {
+      return res.status(400).json({ error: 'guestName, checkIn, and checkOut are required' });
+    }
+    const ciDate = new Date(checkIn);
+    const coDate = new Date(checkOut);
+    // Validate check-in hour (12-24)
+    const ciHour = ciDate.getHours();
+    if (ciHour < 12) {
+      return res.status(400).json({ error: 'Check-in must be between 12:00 and 24:00' });
+    }
+    // Validate check-out hour (8-11)
+    const coHour = coDate.getHours();
+    if (coHour < 8 || coHour > 11) {
+      return res.status(400).json({ error: 'Check-out must be between 08:00 and 11:00' });
+    }
+    // Check overlap
+    const overlap = await Booking.findOne({
+      $or: [
+        { checkIn: { $lt: coDate }, checkOut: { $gt: ciDate } }
+      ]
+    });
+    if (overlap) {
+      return res.status(409).json({ error: 'This time slot overlaps with an existing booking', existingBooking: overlap });
+    }
+    const booking = await Booking.create({ guestName, checkIn: ciDate, checkOut: coDate });
+    res.status(201).json(booking);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/bookings/:id', async (req, res) => {
+  try {
+    const booking = await Booking.findByIdAndDelete(req.params.id);
+    if (!booking) return res.status(404).json({ error: 'Booking not found' });
+    res.json({ message: 'Booking cancelled', booking });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Agent Chat Routes
+app.post('/api/agent/chat', async (req, res) => {
+  try {
+    const { message, sessionId } = req.body;
+    if (!message) return res.status(400).json({ error: 'Message is required' });
+    const sid = sessionId || 'default';
+    const result = await processAgentMessage(message, sid);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/agent/chat/history', async (req, res) => {
+  try {
+    const sid = req.query.sessionId || 'default';
+    const chat = await AgentChat.findOne({ sessionId: sid });
+    res.json(chat ? chat.messages : []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/agent/chat/history', async (req, res) => {
+  try {
+    const sid = req.query.sessionId || 'default';
+    await AgentChat.deleteOne({ sessionId: sid });
+    res.json({ message: 'Chat history cleared' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
