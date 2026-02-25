@@ -10,7 +10,7 @@ let connectedPhoneNumber = null;
 function initializeWhatsApp() {
     if (client) {
         if (status === 'error') {
-            try { client.destroy(); } catch(e) {}
+            try { client.destroy(); } catch (e) { }
             client = null;
         } else {
             // Already initialized
@@ -33,7 +33,8 @@ function initializeWhatsApp() {
                 '--no-first-run',
                 '--no-zygote',
                 '--disable-gpu',
-                '--disable-features=site-per-process'
+                '--disable-features=site-per-process',
+                '--disable-dbus'
             ]
         }
     });
@@ -47,7 +48,7 @@ function initializeWhatsApp() {
     client.on('ready', () => {
         status = 'connected';
         qrCodeDataUrl = null;
-        
+
         let phoneStr = '';
         if (client.info && client.info.wid) {
             phoneStr = client.info.wid.user || '';
@@ -62,7 +63,7 @@ function initializeWhatsApp() {
                 phoneStr = client.info.wid._serialized.split('@')[0];
             }
         }
-        
+
         connectedPhoneNumber = phoneStr || 'Connected User';
         console.log(`WhatsApp Client is ready! Connected as: ${connectedPhoneNumber}`);
     });
@@ -75,7 +76,7 @@ function initializeWhatsApp() {
         console.error('WhatsApp Auth failure', msg);
         status = 'error';
         if (client) {
-            try { client.destroy(); } catch(e) {}
+            try { client.destroy(); } catch (e) { }
             client = null;
         }
     });
@@ -95,7 +96,7 @@ function initializeWhatsApp() {
         if (msg.fromMe || msg.isGroupMsg) return;
 
         console.log(`Received message from ${msg.from}: ${msg.body}`);
-        
+
         try {
             const reply = await generateReply(msg.body, msg.from);
             if (reply) {
@@ -111,7 +112,7 @@ function initializeWhatsApp() {
         console.error('Failed to initialize WhatsApp client', err);
         status = 'error';
         if (client) {
-            try { client.destroy(); } catch(e) {}
+            try { client.destroy(); } catch (e) { }
             client = null;
         }
     });
@@ -133,13 +134,13 @@ async function logout() {
     if (client) {
         try {
             await client.logout();
-        } catch(e) {
+        } catch (e) {
             console.error('Error during logout:', e);
         }
         status = 'disconnected';
         qrCodeDataUrl = null;
         connectedPhoneNumber = null;
-        if(client) {
+        if (client) {
             client.destroy();
             client = null;
         }
