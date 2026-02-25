@@ -86,7 +86,7 @@ export default function AgentPage() {
         } else if (!data.booking.success) {
           setMessages(prev => [...prev, {
             role: 'model',
-            content: `❌ BOOKING FAILED\n${data.booking.error}`
+            content: `❌ BOOKING FAILED\n${data.booking?.error}`
           }]);
         }
       }
