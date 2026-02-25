@@ -27,7 +27,7 @@ export default function Home() {
     try {
       const res = await fetch(`/api/bookings/${year}/${month + 1}`);
       const data = await res.json();
-      setBookings(data);
+      if (Array.isArray(data)) setBookings(data);
     } catch (err) {
       console.error('Failed to fetch bookings:', err);
     }

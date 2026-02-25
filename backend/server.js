@@ -4,6 +4,8 @@ const cors = require('cors');
 require('dotenv').config();
 
 const { processAgentMessage } = require('./agentChatService');
+const { processPlannerMessage } = require('./plannerAgentService');
+const { processOrchestratorMessage } = require('./orchestratorService');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -68,6 +70,16 @@ const AgentChatSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }
 });
 const AgentChat = mongoose.model('AgentChat', AgentChatSchema);
+
+const PlannerTaskSchema = new mongoose.Schema({
+  title: { type: String, required: true },
+  description: { type: String, default: '' },
+  dueDate: { type: Date, default: null },
+  priority: { type: String, enum: ['low', 'medium', 'high'], default: 'medium' },
+  completed: { type: Boolean, default: false },
+  createdAt: { type: Date, default: Date.now }
+});
+const PlannerTask = mongoose.model('PlannerTask', PlannerTaskSchema);
 
 // API Routes
 app.get('/api/agent/config', async (req, res) => {
@@ -263,6 +275,111 @@ app.delete('/api/agent/chat/history', async (req, res) => {
     const sid = req.query.sessionId || 'default';
     await AgentChat.deleteOne({ sessionId: sid });
     res.json({ message: 'Chat history cleared' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Planner Task CRUD Routes
+app.get('/api/planner/tasks', async (req, res) => {
+  try {
+    const tasks = await PlannerTask.find().sort({ completed: 1, priority: -1, dueDate: 1 });
+    res.json(tasks);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/planner/tasks', async (req, res) => {
+  try {
+    const { title, description, dueDate, priority } = req.body;
+    if (!title) return res.status(400).json({ error: 'Title is required' });
+    const task = await PlannerTask.create({ title, description, dueDate, priority });
+    res.status(201).json(task);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/planner/tasks/:id', async (req, res) => {
+  try {
+    const task = await PlannerTask.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    res.json(task);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/planner/tasks/:id', async (req, res) => {
+  try {
+    const task = await PlannerTask.findByIdAndDelete(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    res.json({ message: 'Task deleted', task });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Planner Chat Routes
+app.post('/api/planner/chat', async (req, res) => {
+  try {
+    const { message, sessionId } = req.body;
+    if (!message) return res.status(400).json({ error: 'Message is required' });
+    const result = await processPlannerMessage(message, sessionId || 'planner-default');
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/planner/chat/history', async (req, res) => {
+  try {
+    const sid = req.query.sessionId || 'planner-default';
+    const chat = await AgentChat.findOne({ sessionId: sid });
+    res.json(chat ? chat.messages : []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/planner/chat/history', async (req, res) => {
+  try {
+    const sid = req.query.sessionId || 'planner-default';
+    await AgentChat.deleteOne({ sessionId: sid });
+    res.json({ message: 'Planner chat history cleared' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Orchestrator Routes
+app.post('/api/orchestrator/chat', async (req, res) => {
+  try {
+    const { message, sessionId } = req.body;
+    if (!message) return res.status(400).json({ error: 'Message is required' });
+    const result = await processOrchestratorMessage(message, sessionId || 'default');
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/orchestrator/chat/history', async (req, res) => {
+  try {
+    const sid = req.query.sessionId || 'orchestrator-default';
+    const chat = await AgentChat.findOne({ sessionId: sid });
+    res.json(chat ? chat.messages : []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/orchestrator/chat/history', async (req, res) => {
+  try {
+    const sid = req.query.sessionId || 'orchestrator-default';
+    await AgentChat.deleteOne({ sessionId: sid });
+    res.json({ message: 'Orchestrator chat history cleared' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
