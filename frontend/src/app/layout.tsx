@@ -42,11 +42,12 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
+        suppressHydrationWarning
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground min-h-screen`}
       >
         <div className="flex min-h-screen">
           <Navigation />
-          
+
           {/* Main content wrapper adjusts padding based on screen size */}
           <main className="flex-1 w-full pb-16 md:pb-0 md:pl-64 flex flex-col transition-all duration-300">
             <div className="flex-1 w-full mx-auto max-w-7xl p-4 md:p-8">
