@@ -454,9 +454,11 @@ app.post('/api/orchestrator/chat', async (req, res) => {
   try {
     const { message, sessionId } = req.body;
     if (!message) return res.status(400).json({ error: 'Message is required' });
-    const result = await processOrchestratorMessage(message, sessionId || 'default');
+    console.log('[Orchestrator Route] Processing:', message.substring(0, 50));
+    const result = await processOrchestratorMessage(message, sessionId || 'orchestrator-default');
     res.json(result);
   } catch (err) {
+    console.error('[Orchestrator Route] Error:', err.message, err.stack);
     res.status(500).json({ error: err.message });
   }
 });

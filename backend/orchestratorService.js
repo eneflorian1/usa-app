@@ -173,34 +173,59 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
     const AgentChat = mongoose.model('AgentChat');
 
     // 1. Get/create chat session
-    let chat = await AgentChat.findOne({ sessionId });
-    if (!chat) {
-        chat = await AgentChat.create({ sessionId, agentType: 'orchestrator', messages: [] });
+    let chat;
+    try {
+        chat = await AgentChat.findOne({ sessionId });
+        if (!chat) {
+            chat = await AgentChat.create({ sessionId, agentType: 'orchestrator', messages: [] });
+        }
+    } catch (err) {
+        console.error('[Orchestrator] DB error getting chat:', err.message);
+        chat = { messages: [], summary: '', save: async () => { } };
     }
 
-    // 2. Summarize if conversation is too long
-    const modelBasic = await getGeminiModelBasic();
-    await summarizeConversationIfNeeded(sessionId, modelBasic);
+    // 2. Summarize if conversation is too long (safe)
+    try {
+        const modelBasic = await getGeminiModelBasic();
+        await summarizeConversationIfNeeded(sessionId, modelBasic);
+    } catch (err) {
+        console.error('[Orchestrator] Summarize error (non-fatal):', err.message);
+    }
 
     // 3. Intent Classification
-    const intentModel = await getGeminiModel(INTENT_PROMPT);
-    const intentResult = await intentModel.generateContent(userMessage);
     let intent = 'GENERAL';
     let confidence = 0.5;
     let reasoning = '';
     try {
+        const intentModel = await getGeminiModel(INTENT_PROMPT);
+        const intentResult = await intentModel.generateContent(userMessage);
         const intentText = intentResult.response.text();
-        const intentJson = JSON.parse(intentText.replace(/```json\n?|\n?```/g, '').trim());
+        console.log('[Orchestrator] Intent raw:', intentText);
+        const cleaned = intentText.replace(/```json\n?/g, '').replace(/\n?```/g, '').trim();
+        const intentJson = JSON.parse(cleaned);
         intent = intentJson.intent || 'GENERAL';
         confidence = intentJson.confidence || 0.5;
         reasoning = intentJson.reasoning || '';
-    } catch {
-        // Default to GENERAL if parsing fails
+    } catch (err) {
+        console.error('[Orchestrator] Intent classification error:', err.message);
+        // Continue with GENERAL intent
     }
 
     // 4. Build ReAct prompt with context
-    const knowledgeContext = await getContextForAgent('orchestrator');
-    const userProfile = await getUserProfile(sessionId);
+    let knowledgeContext = '';
+    try {
+        knowledgeContext = await getContextForAgent('orchestrator') || '';
+    } catch (err) {
+        console.error('[Orchestrator] Knowledge context error (non-fatal):', err.message);
+    }
+
+    let userProfile = {};
+    try {
+        userProfile = await getUserProfile(sessionId) || {};
+    } catch (err) {
+        console.error('[Orchestrator] User profile error (non-fatal):', err.message);
+    }
+
     const profileStr = userProfile?.name
         ? `\nPROFIL UTILIZATOR: Nume: ${userProfile.name}, Preferințe: ${(userProfile.preferences || []).join(', ')}`
         : '';
@@ -212,7 +237,7 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
         .replace('{CONVERSATION_SUMMARY}', summaryStr);
 
     // 5. Build history and send to ReAct agent
-    const recentMessages = chat.messages.slice(-20);
+    const recentMessages = (chat.messages || []).slice(-20);
     const history = recentMessages.map(msg => ({
         role: msg.role === 'user' ? 'user' : 'model',
         parts: [{ text: msg.content }]
@@ -222,49 +247,65 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
     const reactChat = reactModel.startChat({ history });
     const reactResult = await reactChat.sendMessage(userMessage);
     let responseText = reactResult.response.text();
+    console.log('[Orchestrator] ReAct response:', responseText.substring(0, 200));
 
     // 6. Check for tool calls
     let toolResult = null;
-    const toolCall = extractToolCall(responseText);
-    if (toolCall) {
-        // Add session info for escalation
-        if (toolCall.tool === 'escalate_to_human') {
-            toolCall.params.sessionId = sessionId;
-            // Include recent messages as context
-            toolCall.params.context = recentMessages.slice(-5).map(m => `${m.role}: ${m.content}`).join('\n');
-        }
-        toolResult = await executeTool(toolCall);
-        responseText = cleanToolTags(responseText);
-
-        // If tool was executed, get a final response incorporating the result
-        if (toolResult.success) {
-            if (toolResult.type === 'escalation') {
-                responseText = responseText || 'Vă fac imediat legătura cu un coleg. Un moment, vă rog.';
-            } else if (!responseText && toolResult.data) {
-                // Ask model to formulate a response using tool result
-                const followUp = await reactChat.sendMessage(
-                    `[TOOL RESULT for ${toolCall.tool}]: ${typeof toolResult.data === 'string' ? toolResult.data : JSON.stringify(toolResult.data)}\n\nFormulează un răspuns prietenos bazat pe acest rezultat.`
-                );
-                responseText = followUp.response.text();
-                responseText = cleanToolTags(responseText);
+    let toolCall = null;
+    try {
+        toolCall = extractToolCall(responseText);
+        if (toolCall) {
+            console.log('[Orchestrator] Tool call:', JSON.stringify(toolCall));
+            // Add session info for escalation
+            if (toolCall.tool === 'escalate_to_human') {
+                toolCall.params = toolCall.params || {};
+                toolCall.params.sessionId = sessionId;
+                toolCall.params.context = recentMessages.slice(-5).map(m => `${m.role}: ${m.content}`).join('\n');
             }
-        } else {
-            responseText = responseText || `Eroare: ${toolResult.error}`;
+            toolResult = await executeTool(toolCall);
+            responseText = cleanToolTags(responseText);
+
+            // If tool was executed, get a final response incorporating the result
+            if (toolResult.success) {
+                if (toolResult.type === 'escalation') {
+                    responseText = responseText || 'Vă fac imediat legătura cu un coleg. Un moment, vă rog.';
+                } else if (!responseText && toolResult.data) {
+                    const followUp = await reactChat.sendMessage(
+                        `[TOOL RESULT for ${toolCall.tool}]: ${typeof toolResult.data === 'string' ? toolResult.data : JSON.stringify(toolResult.data)}\n\nFormulează un răspuns prietenos bazat pe acest rezultat.`
+                    );
+                    responseText = followUp.response.text();
+                    responseText = cleanToolTags(responseText);
+                }
+            } else {
+                responseText = responseText || `Eroare: ${toolResult.error}`;
+            }
         }
+    } catch (err) {
+        console.error('[Orchestrator] Tool execution error:', err.message);
+        responseText = responseText || 'Am întâmpinat o eroare la procesarea cererii. Încearcă din nou.';
     }
 
-    // 7. Extract user profile if present
-    const profileData = extractUserProfile(responseText);
-    if (profileData) {
-        await updateUserProfile(sessionId, { ...userProfile, ...profileData });
+    // 7. Extract user profile if present (safe)
+    try {
+        const profileData = extractUserProfile(responseText);
+        if (profileData) {
+            await updateUserProfile(sessionId, { ...userProfile, ...profileData });
+            responseText = cleanProfileTags(responseText);
+        }
+    } catch (err) {
+        console.error('[Orchestrator] Profile extraction error (non-fatal):', err.message);
         responseText = cleanProfileTags(responseText);
     }
 
-    // 8. Save to history
-    chat.messages.push({ role: 'user', content: userMessage });
-    chat.messages.push({ role: 'model', content: responseText });
-    chat.updatedAt = Date.now();
-    await chat.save();
+    // 8. Save to history (safe)
+    try {
+        chat.messages.push({ role: 'user', content: userMessage });
+        chat.messages.push({ role: 'model', content: responseText });
+        chat.updatedAt = Date.now();
+        await chat.save();
+    } catch (err) {
+        console.error('[Orchestrator] Save history error (non-fatal):', err.message);
+    }
 
     // 9. Build response
     return {
