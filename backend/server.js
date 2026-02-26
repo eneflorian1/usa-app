@@ -6,6 +6,8 @@ require('dotenv').config();
 const { processAgentMessage } = require('./agentChatService');
 const { processPlannerMessage } = require('./plannerAgentService');
 const { processOrchestratorMessage } = require('./orchestratorService');
+const { processGlassesRequest, validateGlassesToken, getRecentMemories } = require('./glassesGatewayService');
+const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -102,6 +104,16 @@ const EscalationSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 const Escalation = mongoose.model('Escalation', EscalationSchema);
+
+const GlassesMemorySchema = new mongoose.Schema({
+  category: { type: String, default: 'general' }, // observation, preference, fact, person, conversation
+  content: { type: String, required: true },
+  importance: { type: String, enum: ['low', 'medium', 'high'], default: 'medium' },
+  source: { type: String, default: 'glasses' }, // glasses, manual, auto
+  updatedAt: { type: Date, default: Date.now }
+});
+GlassesMemorySchema.index({ content: 'text', category: 'text' });
+const GlassesMemory = mongoose.model('GlassesMemory', GlassesMemorySchema);
 
 const PlannerTaskSchema = new mongoose.Schema({
   title: { type: String, required: true },
@@ -505,6 +517,113 @@ app.post('/api/whatsapp/logout', async (req, res) => {
 
 app.get('/api/whatsapp/phoneNumber', (req, res) => {
   res.json({ phoneNumber: whatsappService.getPhoneNumber() });
+});
+
+// ===================== GLASSES GATEWAY ROUTES =====================
+
+// OpenAI-compatible endpoint (drop-in replacement for OpenClaw)
+app.post('/v1/chat/completions', async (req, res) => {
+  try {
+    // Validate Bearer token
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Missing or invalid Authorization header' });
+    }
+    const token = authHeader.substring(7);
+    const valid = await validateGlassesToken(token);
+    if (!valid) {
+      return res.status(401).json({ error: 'Invalid gateway token' });
+    }
+
+    const { messages } = req.body;
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: 'messages array is required' });
+    }
+
+    const sessionKey = req.headers['x-openclaw-session-key'] || 'glasses-default';
+    console.log(`[Glasses Gateway] Session: ${sessionKey}, Messages: ${messages.length}`);
+
+    const result = await processGlassesRequest(messages, sessionKey);
+
+    // Return in OpenAI format (same as what OpenClawBridge.kt expects)
+    res.json({
+      id: `glasses-${Date.now()}`,
+      object: 'chat.completion',
+      created: Math.floor(Date.now() / 1000),
+      model: 'glasses-gateway',
+      choices: [{
+        index: 0,
+        message: {
+          role: 'assistant',
+          content: result.content
+        },
+        finish_reason: 'stop'
+      }],
+      usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+    });
+  } catch (err) {
+    console.error('[Glasses Gateway] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Glasses memories CRUD
+app.get('/api/glasses/memories', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 50;
+    const memories = await getRecentMemories(limit);
+    res.json(memories);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/glasses/memories', async (req, res) => {
+  try {
+    await GlassesMemory.deleteMany({});
+    res.json({ message: 'All glasses memories cleared' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/glasses/memories/:id', async (req, res) => {
+  try {
+    const mem = await GlassesMemory.findByIdAndDelete(req.params.id);
+    if (!mem) return res.status(404).json({ error: 'Memory not found' });
+    res.json({ message: 'Memory deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Glasses gateway token management
+app.get('/api/settings/glasses-token', async (req, res) => {
+  try {
+    const setting = await Setting.findOne({ key: 'glasses_gateway_token' });
+    if (!setting || !setting.value) {
+      return res.json({ token: null });
+    }
+    const val = setting.value;
+    const masked = val.length > 8 ? val.slice(0, 4) + '...' + val.slice(-4) : val;
+    res.json({ token: masked, hasToken: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/settings/glasses-token/generate', async (req, res) => {
+  try {
+    const newToken = crypto.randomBytes(24).toString('hex');
+    await Setting.findOneAndUpdate(
+      { key: 'glasses_gateway_token' },
+      { value: newToken, updatedAt: Date.now() },
+      { upsert: true, new: true }
+    );
+    res.json({ token: newToken, message: 'New token generated. Update your glasses app Secrets.kt with this token.' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.listen(PORT, () => {

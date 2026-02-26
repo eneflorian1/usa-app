@@ -240,6 +240,9 @@ export default function SettingsPage() {
         {/* Knowledge Base Section */}
         <KnowledgeBaseSection />
       </div>
+
+      {/* Glasses Gateway */}
+      <GlassesGatewaySection />
     </div>
   );
 }
@@ -402,6 +405,164 @@ function KnowledgeBaseSection() {
                       </div>
                     </div>
                   ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function GlassesGatewaySection() {
+  interface Memory {
+    _id: string;
+    category: string;
+    content: string;
+    importance: string;
+    updatedAt: string;
+  }
+
+  const [tokenDisplay, setTokenDisplay] = useState<string | null>(null);
+  const [hasToken, setHasToken] = useState(false);
+  const [generatedToken, setGeneratedToken] = useState<string | null>(null);
+  const [memories, setMemories] = useState<Memory[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState('');
+
+  useEffect(() => {
+    fetch('/api/settings/glasses-token')
+      .then(r => r.json())
+      .then(data => {
+        if (data.hasToken) {
+          setTokenDisplay(data.token);
+          setHasToken(true);
+        }
+      })
+      .catch(() => { });
+
+    fetch('/api/glasses/memories?limit=20')
+      .then(r => r.json())
+      .then(data => { if (Array.isArray(data)) setMemories(data); })
+      .catch(() => { })
+      .finally(() => setLoading(false));
+  }, []);
+
+  const handleGenerate = async () => {
+    setStatus('Generating...');
+    try {
+      const res = await fetch('/api/settings/glasses-token/generate', { method: 'POST' });
+      const data = await res.json();
+      if (data.token) {
+        setGeneratedToken(data.token);
+        setTokenDisplay(data.token.slice(0, 4) + '...' + data.token.slice(-4));
+        setHasToken(true);
+        setStatus('Token generated! Copy it to Secrets.kt');
+      }
+    } catch {
+      setStatus('Error generating token');
+    }
+  };
+
+  const handleClearMemories = async () => {
+    if (!confirm('Clear all glasses memories?')) return;
+    await fetch('/api/glasses/memories', { method: 'DELETE' });
+    setMemories([]);
+  };
+
+  const importanceColor = (imp: string) => {
+    switch (imp) {
+      case 'high': return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400';
+      case 'medium': return 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400';
+      default: return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400';
+    }
+  };
+
+  const categoryIcon = (cat: string) => {
+    switch (cat) {
+      case 'observation': return '👁️';
+      case 'preference': return '❤️';
+      case 'fact': return '📌';
+      case 'person': return '👤';
+      case 'conversation': return '💬';
+      default: return '🧠';
+    }
+  };
+
+  return (
+    <div className="bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6 shadow-sm space-y-6">
+      <div className="flex items-center justify-between border-b border-gray-100 dark:border-zinc-800 pb-3">
+        <div>
+          <h2 className="text-lg font-semibold">🕶️ Glasses Gateway</h2>
+          <p className="text-xs text-gray-500 mt-0.5">Ray-Ban Meta → usa-app backend</p>
+        </div>
+        <span className={`text-xs px-2 py-1 rounded-full font-medium ${hasToken ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-gray-100 text-gray-500 dark:bg-zinc-800'}`}>
+          {hasToken ? '● Configured' : '○ Not configured'}
+        </span>
+      </div>
+
+      {/* Connection Info */}
+      <div className="bg-gray-50 dark:bg-zinc-800/50 rounded-xl p-4 space-y-2">
+        <h3 className="text-sm font-semibold">Connection Details</h3>
+        <div className="grid grid-cols-2 gap-2 text-xs">
+          <div>
+            <span className="text-gray-400">Endpoint</span>
+            <p className="font-mono mt-0.5">http://155.117.45.192:5000</p>
+          </div>
+          <div>
+            <span className="text-gray-400">Path</span>
+            <p className="font-mono mt-0.5">/v1/chat/completions</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Token Management */}
+      <div className="space-y-3">
+        <h3 className="text-sm font-semibold">Gateway Token</h3>
+        {tokenDisplay && (
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-sm bg-gray-100 dark:bg-zinc-800 px-3 py-1.5 rounded-lg flex-1">{tokenDisplay}</span>
+          </div>
+        )}
+        {generatedToken && (
+          <div className="bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 rounded-xl p-3">
+            <p className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 mb-1">⚠️ Copy this token — it won&apos;t be shown again:</p>
+            <p className="font-mono text-xs break-all select-all bg-white dark:bg-zinc-900 p-2 rounded-lg">{generatedToken}</p>
+            <p className="text-xs text-gray-500 mt-2">Paste this into <code className="bg-gray-100 dark:bg-zinc-800 px-1 rounded">Secrets.kt</code> → <code className="bg-gray-100 dark:bg-zinc-800 px-1 rounded">openClawGatewayToken</code></p>
+          </div>
+        )}
+        <div className="flex items-center gap-3">
+          <button onClick={handleGenerate} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors">
+            {hasToken ? 'Regenerate Token' : 'Generate Token'}
+          </button>
+          {status && <span className="text-xs text-gray-500">{status}</span>}
+        </div>
+      </div>
+
+      {/* Memories */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold">🧠 Long-Term Memory ({memories.length})</h3>
+          {memories.length > 0 && (
+            <button onClick={handleClearMemories} className="text-xs text-red-500 hover:text-red-600 font-medium">Clear All</button>
+          )}
+        </div>
+        {loading ? (
+          <div className="flex justify-center py-4"><div className="animate-spin w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full" /></div>
+        ) : memories.length === 0 ? (
+          <p className="text-sm text-gray-500 text-center py-4">No memories yet. Start talking to your glasses!</p>
+        ) : (
+          <div className="space-y-1.5 max-h-64 overflow-y-auto">
+            {memories.map(m => (
+              <div key={m._id} className="flex items-start gap-2 bg-gray-50 dark:bg-zinc-800/50 rounded-lg p-2.5 group">
+                <span className="text-sm mt-0.5">{categoryIcon(m.category)}</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm">{m.content}</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${importanceColor(m.importance)}`}>{m.importance}</span>
+                    <span className="text-[10px] text-gray-400">{new Date(m.updatedAt).toLocaleDateString('ro-RO')}</span>
+                  </div>
                 </div>
               </div>
             ))}
