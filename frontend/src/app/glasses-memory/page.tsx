@@ -27,6 +27,7 @@ export default function GlassesMemoryPage() {
     const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState('all');
     const [stats, setStats] = useState<Record<string, number>>({});
+    const [syncStatus, setSyncStatus] = useState('');
 
     const loadMemories = useCallback(async () => {
         try {
@@ -57,6 +58,27 @@ export default function GlassesMemoryPage() {
         await fetch('/api/glasses/memories', { method: 'DELETE' });
         setMemories([]);
         setStats({});
+    };
+
+    const handleSyncFromVPS = async () => {
+        setSyncStatus('Syncing...');
+        try {
+            const res = await fetch('/api/glasses/sync-from-vps', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ vpsUrl: 'http://155.117.45.192:5000' })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                setSyncStatus(`✅ ${data.synced} new, ${data.skipped} duplicates`);
+                loadMemories();
+            } else {
+                setSyncStatus(`❌ ${data.error}`);
+            }
+        } catch {
+            setSyncStatus('❌ Connection failed');
+        }
+        setTimeout(() => setSyncStatus(''), 5000);
     };
 
     const filtered = filter === 'all' ? memories : memories.filter(m => m.category === filter);
@@ -92,6 +114,9 @@ export default function GlassesMemoryPage() {
                     </p>
                 </div>
                 <div className="flex items-center gap-2">
+                    <button onClick={handleSyncFromVPS} disabled={syncStatus === 'Syncing...'} className="text-xs px-3 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-600 dark:bg-indigo-900/20 dark:hover:bg-indigo-900/40 dark:text-indigo-400 font-medium transition-colors disabled:opacity-50" title="Sync memories from VPS">
+                        {syncStatus === 'Syncing...' ? '⏳ Syncing...' : '🔄 Sync VPS'}
+                    </button>
                     <button onClick={loadMemories} className="p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors" title="Refresh">
                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" /><path d="M16 21h5v-5" /></svg>
                     </button>
@@ -102,6 +127,11 @@ export default function GlassesMemoryPage() {
                     )}
                 </div>
             </div>
+            {syncStatus && syncStatus !== 'Syncing...' && (
+                <div className={`text-xs p-2 rounded-lg text-center font-medium ${syncStatus.startsWith('✅') ? 'bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400' : 'bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-400'}`}>
+                    {syncStatus}
+                </div>
+            )}
 
             {/* Stats Cards */}
             <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
@@ -110,8 +140,8 @@ export default function GlassesMemoryPage() {
                         key={key}
                         onClick={() => setFilter(filter === key ? 'all' : key)}
                         className={`rounded-xl p-3 text-center transition-all border ${filter === key
-                                ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 shadow-sm'
-                                : 'border-gray-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:shadow-sm'
+                            ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 shadow-sm'
+                            : 'border-gray-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:shadow-sm'
                             }`}
                     >
                         <span className="text-xl">{meta.icon}</span>

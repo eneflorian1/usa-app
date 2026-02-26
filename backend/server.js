@@ -6,7 +6,7 @@ require('dotenv').config();
 const { processAgentMessage } = require('./agentChatService');
 const { processPlannerMessage } = require('./plannerAgentService');
 const { processOrchestratorMessage } = require('./orchestratorService');
-const { processGlassesRequest, validateGlassesToken, getRecentMemories } = require('./glassesGatewayService');
+const { processGlassesRequest, validateGlassesToken, getRecentMemories, getAllMemories, saveMemory } = require('./glassesGatewayService');
 const crypto = require('crypto');
 
 const app = express();
@@ -622,6 +622,61 @@ app.post('/api/settings/glasses-token/generate', async (req, res) => {
     );
     res.json({ token: newToken, message: 'New token generated. Update your glasses app Secrets.kt with this token.' });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Glasses memory sync endpoints
+app.get('/api/glasses/memories/export', async (req, res) => {
+  try {
+    const memories = await getAllMemories();
+    res.json(memories);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/glasses/sync-from-vps', async (req, res) => {
+  try {
+    const { vpsUrl } = req.body;
+    if (!vpsUrl) {
+      return res.status(400).json({ error: 'vpsUrl is required (e.g. http://155.117.45.192:5000)' });
+    }
+
+    console.log(`[Glasses Sync] Fetching memories from ${vpsUrl}...`);
+    const response = await fetch(`${vpsUrl}/api/glasses/memories/export`);
+    if (!response.ok) {
+      throw new Error(`VPS returned ${response.status}: ${response.statusText}`);
+    }
+    const vpsMemories = await response.json();
+
+    if (!Array.isArray(vpsMemories) || vpsMemories.length === 0) {
+      return res.json({ message: 'No memories on VPS to sync', synced: 0 });
+    }
+
+    let synced = 0;
+    let skipped = 0;
+    for (const mem of vpsMemories) {
+      // Check if memory already exists (by content match)
+      const existing = await GlassesMemory.findOne({ content: mem.content });
+      if (!existing) {
+        await GlassesMemory.create({
+          category: mem.category || 'general',
+          content: mem.content,
+          importance: mem.importance || 'medium',
+          source: mem.source || 'vps-sync',
+          updatedAt: mem.updatedAt || new Date()
+        });
+        synced++;
+      } else {
+        skipped++;
+      }
+    }
+
+    console.log(`[Glasses Sync] Done: ${synced} synced, ${skipped} skipped (duplicates)`);
+    res.json({ message: `Synced ${synced} memories from VPS`, synced, skipped, total: vpsMemories.length });
+  } catch (err) {
+    console.error('[Glasses Sync] Error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

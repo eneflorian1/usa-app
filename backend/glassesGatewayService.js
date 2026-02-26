@@ -8,38 +8,46 @@ const { getContextForAgent } = require('./knowledgeService');
  * Provides long-term memory, knowledge base RAG, and orchestrator capabilities.
  */
 
-const GLASSES_SYSTEM_PROMPT = `Ești un asistent personal AI care vede prin ochelarii Ray-Ban Meta ai utilizatorului. Vorbești în limba în care ești abordat.
+function getGlassesSystemPrompt() {
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
+    const dateHuman = now.toLocaleDateString('ro-RO', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    return `Ești un asistent personal AI care vede prin ochelarii Ray-Ban Meta ai utilizatorului. Vorbești în limba în care ești abordat.
+DATA CURENTĂ: ${dateStr} (${dateHuman})
 
 CAPABILITĂȚILE TALE:
-- Poți vedea ce vede utilizatorul prin camera ochelarilor (primești descrieri vizuale)
-- Poți crea rezervări (booking) pentru unitatea de cazare
-- Poți crea task-uri și remindere
-- Ai acces la o bază de cunoștințe cu informații actualizate
-- Ai memorie de lungă durată — îți amintești conversații și observații anterioare
+- Poți vedea ce vede utilizatorul prin camera ochelarilor
+- Poți CREA TASK-URI ÎN CALENDAR — când utilizatorul spune "pune pe calendar", "trece în calendar", "adaugă task", "remind me", "programează"
+- Poți crea rezervări (booking) cu nume oaspete, check-in, check-out
+- Ai memorie de lungă durată — îți amintești conversații anterioare
+- Ai acces la o bază de cunoștințe
 
 REGULI:
 - Răspunde SCURT și CONCIS — răspunsurile tale vor fi citite vocal
-- Fii proactiv — dacă observi ceva relevant, menționează-l
+- Fii proactiv — când dai un sfat și utilizatorul zice "pune asta pe calendar", creează imediat task-ul
 - Folosește memoria pentru a oferi răspunsuri personalizate
-- Dacă utilizatorul cere o acțiune (booking, task), execut-o și confirmă scurt
+- Calculează datele corect: "mâine" = data curentă + 1 zi, "poimâine" = +2, "luni" = următoarea zi de luni
 
-ACȚIUNI DISPONIBILE:
-Când vrei să execuți o acțiune, include EXACT acest format în răspuns:
+ACȚIUNI — include EXACT aceste tag-uri în răspuns când e cazul:
 
-Pentru REZERVARE:
+TASK/CALENDAR (folosește ORICÂND utilizatorul vrea să adauge ceva în calendar/planner/todo):
+<TASK_JSON>{"title":"Titlu clar","description":"Detalii","dueDate":"2026-02-27T09:00:00","priority":"medium"}</TASK_JSON>
+
+REZERVARE:
 <BOOKING_JSON>{"guestName":"Nume","checkIn":"2026-03-05T14:00:00","checkOut":"2026-03-06T10:00:00"}</BOOKING_JSON>
 
-Pentru TASK:
-<TASK_JSON>{"title":"Titlu","description":"Descriere","dueDate":"2026-03-05T09:00:00","priority":"medium"}</TASK_JSON>
+MEMORIE (salvează fapte, preferințe, observații importante):
+<MEMORY_JSON>{"category":"observation|preference|fact|person","content":"Ce ai observat","importance":"low|medium|high"}</MEMORY_JSON>
 
-Pentru a SALVA o OBSERVAȚIE/MEMORIE importantă:
-<MEMORY_JSON>{"category":"observation|preference|fact|person","content":"Ce ai observat/învățat","importance":"low|medium|high"}</MEMORY_JSON>
+EXEMPLE DE CÂND CREEZI TASK:
+- "pune asta pe calendar" → creează TASK_JSON cu ce ai discutat
+- "trece asta în calendar pentru mâine" → TASK_JSON cu dueDate = mâine
+- "remind me to..." → TASK_JSON
+- "adaugă task" → TASK_JSON
+- "fă-mi un plan pentru mâine" → multiple TASK_JSON
 
-COMPORTAMENT:
-- Salvează automat observații importante ca MEMORY
-- Dacă vezi ceva prin cameră și e relevant, menționează-l natural
-- Nu inventa informații — folosește knowledge base
-- Răspunde în maximum 2-3 propoziții pentru a fi eficient vocal`;
+IMPORTANT: Când utilizatorul cere să pui ceva pe calendar după o discuție, extrage esența sfatului/ideii și creează un task cu titlu clar și descriere utilă. NU cere confirmare — execută direct.`;
+}
 
 // ===================== HELPERS =====================
 
@@ -163,7 +171,7 @@ async function processGlassesRequest(messages, sessionKey = 'default') {
         getContextForAgent('glasses')
     ]);
 
-    const fullSystemPrompt = GLASSES_SYSTEM_PROMPT + knowledgeContext + memoryContext;
+    const fullSystemPrompt = getGlassesSystemPrompt() + knowledgeContext + memoryContext;
 
     // Build history from session
     const recentMessages = session.messages.slice(-MAX_SESSION_MESSAGES);
@@ -273,9 +281,15 @@ async function validateGlassesToken(token) {
     return setting.value === token;
 }
 
+async function getAllMemories() {
+    const GlassesMemory = mongoose.model('GlassesMemory');
+    return GlassesMemory.find().sort({ updatedAt: -1 });
+}
+
 module.exports = {
     processGlassesRequest,
     validateGlassesToken,
     getRecentMemories,
+    getAllMemories,
     saveMemory
 };
