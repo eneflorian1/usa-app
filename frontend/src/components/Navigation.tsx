@@ -3,7 +3,7 @@
 import { useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Settings, MessageCircle, User, Home, BarChart2, Bell, Brain, CalendarCheck, Calendar, Eye } from 'lucide-react';
+import { Settings, MessageCircle, Home, BarChart2, Bell, Brain, CalendarCheck, Calendar, Eye } from 'lucide-react';
 
 const navItems = [
   { href: '/', icon: Home, label: 'Home', showOnMobile: true },
@@ -13,7 +13,6 @@ const navItems = [
   { href: '/whatsapp', icon: MessageCircle, label: 'WhatsApp', showOnMobile: false },
   { href: '/analytics', icon: BarChart2, label: 'Analytics', showOnMobile: false },
   { href: '/notifications', icon: Bell, label: 'Alerts', showOnMobile: false },
-  { href: '/agent', icon: User, label: 'Booking', showOnMobile: false },
   { href: '/calendar', icon: Calendar, label: 'Calendar', showOnMobile: true },
   { href: '/settings', icon: Settings, label: 'Settings', showOnMobile: true },
 ];

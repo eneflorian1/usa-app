@@ -115,16 +115,16 @@ export default function PlannerPage() {
     const isStatusMsg = (c: string) => c.startsWith('✅') || c.startsWith('❌');
 
     return (
-        <div className="h-[calc(100vh-7rem)] md:h-[calc(100vh-4rem)] flex flex-col max-w-5xl mx-auto">
+        <div className="h-[calc(100vh-5.5rem)] md:h-[calc(100vh-4rem)] flex flex-col max-w-5xl mx-auto">
             {/* Header */}
-            <div className="flex items-center justify-between pb-3 border-b border-gray-200 dark:border-zinc-800">
-                <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 md:w-12 md:h-12 rounded-2xl bg-gradient-to-br from-teal-500 to-cyan-600 flex items-center justify-center shadow-lg">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 2v4" /><path d="M16 2v4" /><rect width="18" height="18" x="3" y="4" rx="2" /><path d="M3 10h18" /><path d="m9 16 2 2 4-4" /></svg>
+            <div className="flex items-center justify-between pb-2 border-b border-gray-200 dark:border-zinc-800">
+                <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 md:w-12 md:h-12 rounded-xl md:rounded-2xl bg-gradient-to-br from-teal-500 to-cyan-600 flex items-center justify-center shadow-lg">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 2v4" /><path d="M16 2v4" /><rect width="18" height="18" x="3" y="4" rx="2" /><path d="M3 10h18" /><path d="m9 16 2 2 4-4" /></svg>
                     </div>
                     <div>
-                        <h1 className="text-lg md:text-xl font-bold tracking-tight">Planner Agent</h1>
-                        <p className="text-xs text-teal-500 font-medium">{tasks.filter(t => !t.completed).length} active tasks</p>
+                        <h1 className="text-base md:text-xl font-bold tracking-tight">Planner Agent</h1>
+                        <p className="text-[10px] md:text-xs text-teal-500 font-medium">{tasks.filter(t => !t.completed).length} active tasks</p>
                     </div>
                 </div>
                 {/* Mobile tab switching */}
@@ -137,7 +137,7 @@ export default function PlannerPage() {
             </div>
 
             {/* Content */}
-            <div className="flex-1 flex gap-4 overflow-hidden pt-3">
+            <div className="flex-1 flex gap-4 overflow-hidden pt-2">
                 {/* Chat Panel */}
                 <div className={`flex-1 flex flex-col ${activeTab === 'tasks' ? 'hidden md:flex' : 'flex'}`}>
                     <div className="flex-1 overflow-y-auto space-y-3 pb-2">
@@ -145,10 +145,10 @@ export default function PlannerPage() {
                             <div className="flex justify-center items-center h-full"><div className="animate-spin w-6 h-6 border-2 border-teal-500 border-t-transparent rounded-full" /></div>
                         ) : messages.length === 0 ? (
                             <div className="flex flex-col items-center justify-center h-full text-center px-4">
-                                <div className="w-14 h-14 rounded-2xl bg-teal-500/10 flex items-center justify-center mb-3">📋</div>
-                                <h3 className="text-sm font-semibold mb-1">Planner AI</h3>
+                                <div className="w-10 h-10 rounded-xl bg-teal-500/10 flex items-center justify-center mb-2">📋</div>
+                                <h3 className="text-sm font-semibold mb-0.5">Planner AI</h3>
                                 <p className="text-xs text-gray-500 max-w-xs">Tell me what you need to do and I&apos;ll create tasks for you.</p>
-                                <div className="mt-3 flex flex-wrap justify-center gap-2">
+                                <div className="mt-2 flex flex-wrap justify-center gap-1.5">
                                     {['Creează un task: cumpără flori', 'Plan for tomorrow', 'Ce am de făcut?'].map(s => (
                                         <button key={s} onClick={() => { setInput(s); inputRef.current?.focus(); }}
                                             className="text-[11px] px-2.5 py-1 rounded-full border border-gray-200 dark:border-zinc-700 text-gray-500 hover:border-teal-400 hover:text-teal-600 transition-colors"
