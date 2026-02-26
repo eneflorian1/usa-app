@@ -56,6 +56,13 @@ EXEMPLE DE CÂND TRIMIȚI WHATSAPP:
 - "scrie-i lui X pe WhatsApp" → WHATSAPP_JSON
 - "send WhatsApp to X" → WHATSAPP_JSON
 - "spune-i lui X că..." → WHATSAPP_JSON
+- "trimite-i lui X" → WHATSAPP_JSON
+- "dă-i mesaj lui X" → WHATSAPP_JSON
+
+ATENȚIE — NU CONFUNDA:
+- "trimite mesaj" / "scrie-i lui" / "spune-i lui" / "dă-i mesaj" = WHATSAPP_JSON (trimite mesaj pe WhatsApp)
+- "pune pe calendar" / "adaugă task" / "remind me" = TASK_JSON (adaugă în calendar)
+Dacă utilizatorul menționează un NUME DE PERSOANĂ și vrea să-i transmită ceva, este ÎNTOTDEAUNA WHATSAPP_JSON, nu TASK_JSON.
 
 IMPORTANT: Când utilizatorul cere să pui ceva pe calendar după o discuție, extrage esența sfatului/ideii și creează un task cu titlu clar și descriere utilă. NU cere confirmare — execută direct.
 IMPORTANT: Când trimiți mesaj WhatsApp, folosește exact numele contactului cum îl spune utilizatorul. NU cere confirmare — trimite direct.`;
@@ -268,15 +275,9 @@ async function processGlassesRequest(messages, sessionKey = 'default') {
     for (const waMsg of whatsappActions) {
         if (waMsg.to && waMsg.message) {
             try {
-                const contact = await whatsappService.findChatByName(waMsg.to);
-                if (contact) {
-                    await whatsappService.sendWhatsAppMessage(contact.id, waMsg.message);
-                    results.whatsapp.push({ success: true, to: contact.name, message: waMsg.message });
-                    console.log(`[Glasses] WhatsApp sent to ${contact.name}: "${waMsg.message.substring(0, 50)}"`);
-                } else {
-                    results.whatsapp.push({ success: false, error: `Nu am găsit contactul "${waMsg.to}" în conversațiile WhatsApp active` });
-                    console.log(`[Glasses] WhatsApp contact not found: "${waMsg.to}"`);
-                }
+                const result = await whatsappService.sendWhatsAppByName(waMsg.to, waMsg.message);
+                results.whatsapp.push({ success: true, to: result.sentTo, message: waMsg.message });
+                console.log(`[Glasses] WhatsApp sent to ${result.sentTo}: "${waMsg.message.substring(0, 50)}"`);
             } catch (err) {
                 results.whatsapp.push({ success: false, error: err.message });
                 console.error('[Glasses] WhatsApp send error:', err.message);

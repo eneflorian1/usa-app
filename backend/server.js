@@ -536,12 +536,8 @@ app.post('/api/whatsapp/send', async (req, res) => {
     if (!to || !message) {
       return res.status(400).json({ error: 'to (contact name) and message are required' });
     }
-    const contact = await whatsappService.findChatByName(to);
-    if (!contact) {
-      return res.status(404).json({ error: `Contact "${to}" not found in active WhatsApp chats` });
-    }
-    await whatsappService.sendWhatsAppMessage(contact.id, message);
-    res.json({ success: true, sentTo: contact.name, message });
+    const result = await whatsappService.sendWhatsAppByName(to, message);
+    res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

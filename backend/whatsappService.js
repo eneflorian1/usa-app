@@ -184,7 +184,7 @@ async function getActiveChats() {
 }
 
 /**
- * Fuzzy-find a chat by contact name. Matches partial, case-insensitive.
+ * Fuzzy-find a chat by contact name. Returns the actual Chat object.
  * e.g. "mama" matches "Mama ❤️", "ion" matches "Ion Popescu"
  */
 async function findChatByName(name) {
@@ -196,33 +196,46 @@ async function findChatByName(name) {
 
     // 1. Exact match (case-insensitive)
     let found = chats.find(c => (c.name || '').toLowerCase() === needle);
-    if (found) return { id: found.id._serialized, name: found.name };
+    if (found) return found;
 
     // 2. Starts with
     found = chats.find(c => (c.name || '').toLowerCase().startsWith(needle));
-    if (found) return { id: found.id._serialized, name: found.name };
+    if (found) return found;
 
     // 3. Contains
     found = chats.find(c => (c.name || '').toLowerCase().includes(needle));
-    if (found) return { id: found.id._serialized, name: found.name };
+    if (found) return found;
 
     // 4. Reverse: needle contains chat name
     found = chats.find(c => c.name && needle.includes(c.name.toLowerCase()));
-    if (found) return { id: found.id._serialized, name: found.name };
+    if (found) return found;
 
     return null;
 }
 
 /**
- * Send a WhatsApp message to a chat by its serialized ID.
+ * Send a WhatsApp message using the Chat object directly.
+ * This avoids @lid vs @c.us ID resolution issues.
  */
-async function sendWhatsAppMessage(chatId, message) {
+async function sendMessageToChat(chat, message) {
     if (!client || status !== 'connected') {
         throw new Error('WhatsApp client is not connected');
     }
-    const result = await client.sendMessage(chatId, message);
-    console.log(`[WhatsApp] Message sent to ${chatId}: "${message.substring(0, 50)}..."`);
+    const result = await chat.sendMessage(message);
+    console.log(`[WhatsApp] Message sent to ${chat.name} (${chat.id._serialized}): "${message.substring(0, 50)}"`);
     return result;
+}
+
+/**
+ * Send a WhatsApp message by contact name (convenience wrapper).
+ */
+async function sendWhatsAppByName(contactName, message) {
+    const chat = await findChatByName(contactName);
+    if (!chat) {
+        throw new Error(`Contact "${contactName}" not found in active WhatsApp chats`);
+    }
+    await sendMessageToChat(chat, message);
+    return { success: true, sentTo: chat.name, chatId: chat.id._serialized };
 }
 
 /**
@@ -241,6 +254,7 @@ module.exports = {
     destroyClient,
     getActiveChats,
     findChatByName,
-    sendWhatsAppMessage,
+    sendMessageToChat,
+    sendWhatsAppByName,
     getClient
 };

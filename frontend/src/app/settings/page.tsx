@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Link from 'next/link';
+import { MessageCircle, BarChart2, Bell } from 'lucide-react';
 
 export default function SettingsPage() {
   // API Key state
@@ -97,7 +99,20 @@ export default function SettingsPage() {
 
   return (
     <div className="h-full flex flex-col space-y-6 max-w-2xl mx-auto pb-10">
-      <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Settings</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Settings</h1>
+        <div className="flex md:hidden items-center space-x-5 text-gray-500 dark:text-gray-400 mt-1 pr-1">
+          <Link href="/whatsapp" className="hover:text-gray-900 dark:hover:text-gray-100 transition-colors p-1" aria-label="WhatsApp">
+            <MessageCircle size={22} />
+          </Link>
+          <Link href="/notifications" className="hover:text-gray-900 dark:hover:text-gray-100 transition-colors p-1" aria-label="Notifications">
+            <Bell size={22} />
+          </Link>
+          <Link href="/analytics" className="hover:text-gray-900 dark:hover:text-gray-100 transition-colors p-1" aria-label="Analytics">
+            <BarChart2 size={22} />
+          </Link>
+        </div>
+      </div>
 
       {/* API Key Configuration */}
       <div className="bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6 shadow-sm">
