@@ -115,9 +115,9 @@ export default function PlannerPage() {
     const isStatusMsg = (c: string) => c.startsWith('✅') || c.startsWith('❌');
 
     return (
-        <div className="h-[calc(100vh-5.5rem)] md:h-[calc(100vh-4rem)] flex flex-col max-w-5xl mx-auto">
-            {/* Header */}
-            <div className="flex items-center justify-between pb-2 border-b border-gray-200 dark:border-zinc-800">
+        <div className="h-[calc(100dvh-6rem)] md:h-[calc(100vh-4rem)] flex flex-col max-w-5xl mx-auto">
+            {/* Header — sticky */}
+            <div className="flex items-center justify-between pb-2 border-b border-gray-200 dark:border-zinc-800 sticky top-0 bg-white dark:bg-[#0a0a0a] z-10">
                 <div className="flex items-center gap-2">
                     <div className="w-8 h-8 md:w-12 md:h-12 rounded-xl md:rounded-2xl bg-gradient-to-br from-teal-500 to-cyan-600 flex items-center justify-center shadow-lg">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 2v4" /><path d="M16 2v4" /><rect width="18" height="18" x="3" y="4" rx="2" /><path d="M3 10h18" /><path d="m9 16 2 2 4-4" /></svg>
@@ -137,10 +137,10 @@ export default function PlannerPage() {
             </div>
 
             {/* Content */}
-            <div className="flex-1 flex gap-4 overflow-hidden pt-2">
+            <div className="flex-1 flex gap-4 overflow-hidden pt-1">
                 {/* Chat Panel */}
                 <div className={`flex-1 flex flex-col ${activeTab === 'tasks' ? 'hidden md:flex' : 'flex'}`}>
-                    <div className="flex-1 overflow-y-auto space-y-3 pb-2">
+                    <div className={`flex-1 ${messages.length > 0 || sending ? 'overflow-y-auto' : 'overflow-hidden'} space-y-3 pb-2`}>
                         {loadingChat ? (
                             <div className="flex justify-center items-center h-full"><div className="animate-spin w-6 h-6 border-2 border-teal-500 border-t-transparent rounded-full" /></div>
                         ) : messages.length === 0 ? (
