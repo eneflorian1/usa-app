@@ -162,11 +162,85 @@ async function destroyClient() {
     }
 }
 
+// ===================== SEND & CONTACT LOOKUP =====================
+
+/**
+ * Get all active (open) WhatsApp chats with name and last message.
+ */
+async function getActiveChats() {
+    if (!client || status !== 'connected') {
+        throw new Error('WhatsApp client is not connected');
+    }
+    const chats = await client.getChats();
+    return chats
+        .filter(c => !c.isGroup)
+        .map(c => ({
+            id: c.id._serialized,
+            name: c.name || c.id.user,
+            lastMessage: c.lastMessage ? c.lastMessage.body : '',
+            timestamp: c.timestamp,
+            unreadCount: c.unreadCount
+        }));
+}
+
+/**
+ * Fuzzy-find a chat by contact name. Matches partial, case-insensitive.
+ * e.g. "mama" matches "Mama ❤️", "ion" matches "Ion Popescu"
+ */
+async function findChatByName(name) {
+    if (!client || status !== 'connected') {
+        throw new Error('WhatsApp client is not connected');
+    }
+    const chats = await client.getChats();
+    const needle = name.toLowerCase().trim();
+
+    // 1. Exact match (case-insensitive)
+    let found = chats.find(c => (c.name || '').toLowerCase() === needle);
+    if (found) return { id: found.id._serialized, name: found.name };
+
+    // 2. Starts with
+    found = chats.find(c => (c.name || '').toLowerCase().startsWith(needle));
+    if (found) return { id: found.id._serialized, name: found.name };
+
+    // 3. Contains
+    found = chats.find(c => (c.name || '').toLowerCase().includes(needle));
+    if (found) return { id: found.id._serialized, name: found.name };
+
+    // 4. Reverse: needle contains chat name
+    found = chats.find(c => c.name && needle.includes(c.name.toLowerCase()));
+    if (found) return { id: found.id._serialized, name: found.name };
+
+    return null;
+}
+
+/**
+ * Send a WhatsApp message to a chat by its serialized ID.
+ */
+async function sendWhatsAppMessage(chatId, message) {
+    if (!client || status !== 'connected') {
+        throw new Error('WhatsApp client is not connected');
+    }
+    const result = await client.sendMessage(chatId, message);
+    console.log(`[WhatsApp] Message sent to ${chatId}: "${message.substring(0, 50)}..."`);
+    return result;
+}
+
+/**
+ * Get the raw client instance.
+ */
+function getClient() {
+    return client;
+}
+
 module.exports = {
     initializeWhatsApp,
     getStatus,
     getQR,
     getPhoneNumber,
     logout,
-    destroyClient
+    destroyClient,
+    getActiveChats,
+    findChatByName,
+    sendWhatsAppMessage,
+    getClient
 };

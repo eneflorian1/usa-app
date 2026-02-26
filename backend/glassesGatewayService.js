@@ -1,6 +1,7 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const mongoose = require('mongoose');
 const { getContextForAgent } = require('./knowledgeService');
+const whatsappService = require('./whatsappService');
 
 /**
  * Glasses Gateway Service
@@ -39,6 +40,9 @@ REZERVARE:
 MEMORIE (salvează fapte, preferințe, observații importante):
 <MEMORY_JSON>{"category":"observation|preference|fact|person","content":"Ce ai observat","importance":"low|medium|high"}</MEMORY_JSON>
 
+MESAJ WHATSAPP (trimite mesaj pe WhatsApp către un contact):
+<WHATSAPP_JSON>{"to":"Mama","message":"Salut, ce faci?"}</WHATSAPP_JSON>
+
 EXEMPLE DE CÂND CREEZI TASK:
 - "pune asta pe calendar" → creează TASK_JSON cu ce ai discutat
 - "trece asta în calendar pentru mâine" → TASK_JSON cu dueDate = mâine
@@ -46,7 +50,15 @@ EXEMPLE DE CÂND CREEZI TASK:
 - "adaugă task" → TASK_JSON
 - "fă-mi un plan pentru mâine" → multiple TASK_JSON
 
-IMPORTANT: Când utilizatorul cere să pui ceva pe calendar după o discuție, extrage esența sfatului/ideii și creează un task cu titlu clar și descriere utilă. NU cere confirmare — execută direct.`;
+EXEMPLE DE CÂND TRIMIȚI WHATSAPP:
+- "trimite mesaj pe WhatsApp lui Mama" → WHATSAPP_JSON
+- "trimite către Ion mesajul salut" → WHATSAPP_JSON
+- "scrie-i lui X pe WhatsApp" → WHATSAPP_JSON
+- "send WhatsApp to X" → WHATSAPP_JSON
+- "spune-i lui X că..." → WHATSAPP_JSON
+
+IMPORTANT: Când utilizatorul cere să pui ceva pe calendar după o discuție, extrage esența sfatului/ideii și creează un task cu titlu clar și descriere utilă. NU cere confirmare — execută direct.
+IMPORTANT: Când trimiți mesaj WhatsApp, folosește exact numele contactului cum îl spune utilizatorul. NU cere confirmare — trimite direct.`;
 }
 
 // ===================== HELPERS =====================
@@ -80,6 +92,7 @@ function cleanAllTags(text) {
         .replace(/<TASK_JSON>[\s\S]*?<\/TASK_JSON>/g, '')
         .replace(/<MEMORY_JSON>[\s\S]*?<\/MEMORY_JSON>/g, '')
         .replace(/<ESCALATE_JSON>[\s\S]*?<\/ESCALATE_JSON>/g, '')
+        .replace(/<WHATSAPP_JSON>[\s\S]*?<\/WHATSAPP_JSON>/g, '')
         .trim();
 }
 
@@ -191,12 +204,13 @@ async function processGlassesRequest(messages, sessionKey = 'default') {
     const bookingActions = extractJSON(responseText, 'BOOKING_JSON');
     const taskActions = extractJSON(responseText, 'TASK_JSON');
     const memoryActions = extractJSON(responseText, 'MEMORY_JSON');
+    const whatsappActions = extractJSON(responseText, 'WHATSAPP_JSON');
 
     // Clean response
     const cleanResponse = cleanAllTags(responseText);
 
     // Execute actions
-    const results = { bookings: [], tasks: [], memories: [] };
+    const results = { bookings: [], tasks: [], memories: [], whatsapp: [] };
 
     // Process bookings
     for (const bookingData of bookingActions) {
@@ -247,6 +261,26 @@ async function processGlassesRequest(messages, sessionKey = 'default') {
         if (mem.content) {
             await saveMemory(mem);
             results.memories.push({ saved: true });
+        }
+    }
+
+    // Process WhatsApp messages
+    for (const waMsg of whatsappActions) {
+        if (waMsg.to && waMsg.message) {
+            try {
+                const contact = await whatsappService.findChatByName(waMsg.to);
+                if (contact) {
+                    await whatsappService.sendWhatsAppMessage(contact.id, waMsg.message);
+                    results.whatsapp.push({ success: true, to: contact.name, message: waMsg.message });
+                    console.log(`[Glasses] WhatsApp sent to ${contact.name}: "${waMsg.message.substring(0, 50)}"`);
+                } else {
+                    results.whatsapp.push({ success: false, error: `Nu am găsit contactul "${waMsg.to}" în conversațiile WhatsApp active` });
+                    console.log(`[Glasses] WhatsApp contact not found: "${waMsg.to}"`);
+                }
+            } catch (err) {
+                results.whatsapp.push({ success: false, error: err.message });
+                console.error('[Glasses] WhatsApp send error:', err.message);
+            }
         }
     }
 
