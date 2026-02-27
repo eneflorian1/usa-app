@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { MessageCircle, BarChart2, Bell } from 'lucide-react';
+import { MessageCircle, BarChart2, Bell, Timer, Box } from 'lucide-react';
 
 export default function SettingsPage() {
   // API Key state
@@ -102,6 +102,12 @@ export default function SettingsPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Settings</h1>
         <div className="flex md:hidden items-center space-x-5 text-gray-500 dark:text-gray-400 mt-1 pr-1">
+          <Link href="/cron-jobs" className="hover:text-gray-900 dark:hover:text-gray-100 transition-colors p-1" aria-label="Cron Jobs">
+            <Timer size={22} />
+          </Link>
+          <Link href="/house-objects" className="hover:text-gray-900 dark:hover:text-gray-100 transition-colors p-1" aria-label="House Objects">
+            <Box size={22} />
+          </Link>
           <Link href="/whatsapp" className="hover:text-gray-900 dark:hover:text-gray-100 transition-colors p-1" aria-label="WhatsApp">
             <MessageCircle size={22} />
           </Link>
