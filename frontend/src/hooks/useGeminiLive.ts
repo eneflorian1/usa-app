@@ -28,8 +28,16 @@ const INPUT_SAMPLE_RATE = 16000;
 const OUTPUT_SAMPLE_RATE = 24000;
 const MIN_SEND_BYTES = 3200; // 100ms at 16kHz mono Int16
 
-// Backend URL — Socket.IO connects to the Express backend, not Next.js
-const BACKEND_URL = 'http://localhost:5000';
+// Backend URL — auto-detect: env var > same-origin on VPS > localhost for dev
+function getBackendUrl(): string {
+    if (typeof window === 'undefined') return 'http://localhost:5000';
+    // If env var is set, use it
+    if (process.env.NEXT_PUBLIC_BACKEND_URL) return process.env.NEXT_PUBLIC_BACKEND_URL;
+    // On VPS: backend is on the same host, port 5000
+    // In dev: also localhost:5000
+    const host = window.location.hostname;
+    return `${window.location.protocol}//${host}:5000`;
+}
 
 export function useGeminiLive(): UseGeminiLiveReturn {
     const [sessionState, setSessionState] = useState<SessionState>('disconnected');
@@ -81,7 +89,7 @@ export function useGeminiLive(): UseGeminiLiveReturn {
 
     // Socket connection
     useEffect(() => {
-        const socket = io(BACKEND_URL, {
+        const socket = io(getBackendUrl(), {
             transports: ['websocket'],
             autoConnect: true
         });
