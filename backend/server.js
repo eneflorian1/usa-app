@@ -158,6 +158,26 @@ const CleanupBatchSchema = new mongoose.Schema({
 });
 const CleanupBatch = mongoose.model('CleanupBatch', CleanupBatchSchema);
 
+const WebAgentSessionSchema = new mongoose.Schema({
+  task: { type: String, required: true },
+  status: { type: String, enum: ['running', 'completed', 'failed'], default: 'running' },
+  startUrl: { type: String, default: '' },
+  steps: [{
+    stepNumber: Number,
+    action: String,
+    details: String,
+    reasoning: String,
+    screenshot: String,
+    timestamp: { type: Date, default: Date.now }
+  }],
+  finalResult: { type: String, default: '' },
+  finalScreenshot: { type: String, default: '' },
+  error: { type: String, default: '' },
+  createdAt: { type: Date, default: Date.now },
+  completedAt: { type: Date, default: null }
+});
+const WebAgentSession = mongoose.model('WebAgentSession', WebAgentSessionSchema);
+
 const CronJobSchema = new mongoose.Schema({
   name: { type: String, required: true },
   cronExpression: { type: String, required: true },
@@ -461,7 +481,27 @@ app.patch('/api/escalations/:id', async (req, res) => {
 // Planner Task CRUD Routes
 app.get('/api/planner/tasks', async (req, res) => {
   try {
-    const tasks = await PlannerTask.find().sort({ completed: 1, createdAt: -1 });
+    let tasks = await PlannerTask.find({}).lean();
+
+    // Sort logic: 1. Incomplete first, 2. By dueDate ascending (undefined goes to bottom), 3. By Priority descending, 4. By createdAt descending
+    const pMap = { high: 3, medium: 2, low: 1 };
+
+    tasks.sort((a, b) => {
+      if (a.completed !== b.completed) return a.completed ? 1 : -1;
+
+      const timeA = a.dueDate ? new Date(a.dueDate).getTime() : Infinity;
+      const timeB = b.dueDate ? new Date(b.dueDate).getTime() : Infinity;
+      if (timeA !== timeB) return timeA - timeB;
+
+      const pA = pMap[a.priority] || 0;
+      const pB = pMap[b.priority] || 0;
+      if (pA !== pB) return pB - pA;
+
+      const curA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const curB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return curB - curA;
+    });
+
     res.json(tasks);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1040,6 +1080,56 @@ app.get('/api/cron-jobs/logs/recent', async (req, res) => {
     const limit = parseInt(req.query.limit) || 30;
     const logs = await cronService.getRecentLogs(limit);
     res.json(logs);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ===================== WEB AGENT ROUTES =====================
+
+const webAgent = require('./webAgentService');
+
+// Run a new web agent task
+app.post('/api/web-agent/run', async (req, res) => {
+  try {
+    const { task, startUrl } = req.body;
+    if (!task) return res.status(400).json({ error: 'task description is required' });
+    // Run async — respond immediately with session info, task runs in background
+    const session = await mongoose.model('WebAgentSession').create({
+      task,
+      status: 'running',
+      startUrl: startUrl || ''
+    });
+    res.status(202).json({ sessionId: session._id, status: 'running', message: 'Task started' });
+    // Run task in background (don't await in request handler)
+    webAgent.runTask(task, { startUrl, existingSessionId: session._id }).catch(err => {
+      console.error('[WebAgent Route] Background task error:', err.message);
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// List web agent sessions
+app.get('/api/web-agent/sessions', async (req, res) => {
+  try {
+    const sessions = await webAgent.listSessions(parseInt(req.query.limit) || 20);
+    res.json(sessions);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Get session details
+app.get('/api/web-agent/sessions/:id', async (req, res) => {
+  try {
+    const session = await webAgent.getSession(req.params.id);
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+    res.json(session);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Stop a running session
+app.post('/api/web-agent/sessions/:id/stop', async (req, res) => {
+  try {
+    const result = await webAgent.stopSession(req.params.id);
+    res.json(result);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

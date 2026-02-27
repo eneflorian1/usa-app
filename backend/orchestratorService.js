@@ -5,6 +5,7 @@ const { executeCronAction } = require('./cronService');
 const { executeCodingAction } = require('./codingAgentService');
 const { executeGhIssuesAction } = require('./ghIssuesService');
 const { executeProcessAction } = require('./processManagerService');
+const { executeWebAgentAction } = require('./webAgentService');
 
 /**
  * ReAct Orchestrator Service
@@ -61,6 +62,11 @@ Pentru PROCESE (management procese background):
 <PROCESS_JSON>{"action":"list"}</PROCESS_JSON>
 <PROCESS_JSON>{"action":"log","sessionId":"abc","tail":20}</PROCESS_JSON>
 <PROCESS_JSON>{"action":"kill","sessionId":"abc"}</PROCESS_JSON>
+
+Pentru WEB AGENT (automatizare browser — poate face ORICE pe web: comenzi, rezervări, contactare persoane, completare formulare, extragere date):
+<WEB_AGENT_JSON>{"task":"Mergi pe wolt.com și comandă salată de la Restaurant X","startUrl":"https://wolt.com"}</WEB_AGENT_JSON>
+<WEB_AGENT_JSON>{"task":"Caută pe Google cele mai bune restaurante din Cluj","startUrl":"https://google.com"}</WEB_AGENT_JSON>
+<WEB_AGENT_JSON>{"task":"Completează formularul de contact pe site-ul X cu mesajul Y"}</WEB_AGENT_JSON>
 
 Pentru CRON JOBS (programare acțiuni recurente):
 <CRON_JSON>{"action":"create","name":"Morning reminder","cron":"0 8 * * *","type":"notification","payload":{"message":"Time to start the day!"}}</CRON_JSON>
@@ -122,10 +128,12 @@ function cleanAllTags(text) {
         .replace(/<GH_ISSUES_JSON>[\s\S]*?<\/GH_ISSUES_JSON>/g, '')
         .replace(/<PROCESS_JSON>[\s\S]*?<\/PROCESS_JSON>/g, '')
         .replace(/<CRON_JSON>[\s\S]*?<\/CRON_JSON>/g, '')
+        .replace(/<WEB_AGENT_JSON>[\s\S]*?<\/WEB_AGENT_JSON>/g, '')
         .trim();
 }
 
-function detectIntent(text, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData) {
+function detectIntent(text, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData) {
+    if (webAgentData) return 'web-agent';
     if (escalateData) return 'escalate';
     if (codingData) return 'coding';
     if (ghIssuesData) return 'gh-issues';
@@ -135,6 +143,7 @@ function detectIntent(text, bookingData, taskData, escalateData, githubData, cro
     if (bookingData) return 'booking';
     if (taskData) return 'planner';
     const lower = text.toLowerCase();
+    if (/mergi pe|deschide site|navigheaz|comand[aă].*pe|caut[aă].*pe.*web|completea.*formular|browser|web.*agent|automat.*web|wolt|uber.*eats|booking\.com|ryanair|emag|amazon/.test(lower)) return 'web-agent';
     if (/cod|code|fix|bug|refactor|review.*pr|analize.*cod|implementea|debug/.test(lower)) return 'coding';
     if (/auto.?fix|repar.*issue|fixeaz.*issue|batch.*fix/.test(lower)) return 'gh-issues';
     if (/proces|session|spawn|background|kill.*proc|oprește.*proc/.test(lower)) return 'process';
@@ -181,7 +190,8 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
     const codingData = extractJSON(responseText, 'CODING_JSON');
     const ghIssuesData = extractJSON(responseText, 'GH_ISSUES_JSON');
     const processData = extractJSON(responseText, 'PROCESS_JSON');
-    const intent = detectIntent(userMessage, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData);
+    const webAgentData = extractJSON(responseText, 'WEB_AGENT_JSON');
+    const intent = detectIntent(userMessage, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData);
 
     // Clean response
     responseText = cleanAllTags(responseText);
@@ -195,6 +205,7 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
     let codingResult = null;
     let ghIssuesResult = null;
     let processResult = null;
+    let webAgentResult = null;
 
     // Process booking
     if (bookingData && bookingData.guestName && bookingData.checkIn && bookingData.checkOut) {
@@ -320,6 +331,17 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
         }
     }
 
+    // Process Web Agent action
+    if (webAgentData) {
+        try {
+            webAgentResult = await executeWebAgentAction(webAgentData);
+            console.log('[Orchestrator] WebAgent action:', webAgentData.task, '→', JSON.stringify(webAgentResult).substring(0, 200));
+        } catch (err) {
+            console.error('[Orchestrator] WebAgent error:', err.message);
+            webAgentResult = { error: err.message };
+        }
+    }
+
     // 6. Save to history
     chat.messages.push({ role: 'user', content: userMessage });
     chat.messages.push({ role: 'model', content: responseText });
@@ -339,7 +361,8 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
         cron: cronResult,
         coding: codingResult,
         ghIssues: ghIssuesResult,
-        process: processResult
+        process: processResult,
+        webAgent: webAgentResult
     };
 }
 
