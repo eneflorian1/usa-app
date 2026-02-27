@@ -18,24 +18,36 @@ const DISPLACEMENT_BATCH_THRESHOLD = 5;
 async function learnObject(name, description, expectedLocation, imageDescription = '') {
     const HouseObject = mongoose.model('HouseObject');
 
-    // Generate embedding for semantic matching
     const searchText = `${name} ${description} ${imageDescription}`.trim();
-    const embedding = await generateEmbedding(searchText);
 
-    // Check if object already exists
-    const existing = await findMostSimilar(searchText, 'HouseObject', 'embedding', {}, 0.8);
+    // Try to generate embedding, but don't fail if it doesn't work
+    let embedding = [];
+    let existing = null;
+    try {
+        embedding = await generateEmbedding(searchText);
+        existing = await findMostSimilar(searchText, 'HouseObject', 'embedding', {}, 0.8);
+    } catch (err) {
+        console.warn(`[ObjectTracker] Embedding failed (will save without): ${err.message}`);
+        // Fallback: try simple name match
+        existing = await HouseObject.findOne({
+            name: { $regex: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+        });
+        if (existing) existing = { doc: existing };
+    }
 
     if (existing) {
         // Update existing object
-        const obj = await HouseObject.findByIdAndUpdate(existing.doc._id, {
+        const updateData = {
             name: name || existing.doc.name,
             description: description || existing.doc.description,
             expectedLocation,
             imageDescription: imageDescription || existing.doc.imageDescription,
-            embedding,
             lastSeen: new Date(),
             lastSeenLocation: expectedLocation
-        }, { new: true });
+        };
+        if (embedding.length > 0) updateData.embedding = embedding;
+
+        const obj = await HouseObject.findByIdAndUpdate(existing.doc._id, updateData, { new: true });
         console.log(`[ObjectTracker] Updated existing object: "${obj.name}" → "${expectedLocation}"`);
         return { action: 'updated', object: obj };
     }
