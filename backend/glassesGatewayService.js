@@ -4,6 +4,9 @@ const { getContextForAgent } = require('./knowledgeService');
 const whatsappService = require('./whatsappService');
 const { processObjectScan, learnObject, getObjectTrackingContext } = require('./objectTrackingService');
 const { executeGitHubAction } = require('./githubService');
+const { executeCodingAction } = require('./codingAgentService');
+const { executeGhIssuesAction } = require('./ghIssuesService');
+const { executeProcessAction } = require('./processManagerService');
 
 /**
  * Glasses Gateway Service
@@ -93,7 +96,19 @@ EXEMPLE GITHUB:
 - "arată-mi PRs" → GITHUB_JSON cu list_prs
 - "creează un issue" → GITHUB_JSON cu create_issue
 - "cum stă CI-ul?" → GITHUB_JSON cu ci_status
-- Când răspunzi cu rezultate GitHub, fii CONCIS — numără și rezumă, nu citi tot JSON-ul`;
+- Când răspunzi cu rezultate GitHub, fii CONCIS — numără și rezumă, nu citi tot JSON-ul
+
+CODING (task-uri de cod):
+<CODING_JSON>{"action":"analyze","files":["backend/server.js"],"question":"Ce face?"}</CODING_JSON>
+<CODING_JSON>{"action":"execute","task":"Fix bug","targetFiles":["backend/server.js"]}</CODING_JSON>
+
+GH-ISSUES (auto-fix issues):
+<GH_ISSUES_JSON>{"action":"analyze","owner":"eneflorian1","repo":"usa-app","issue":1}</GH_ISSUES_JSON>
+<GH_ISSUES_JSON>{"action":"auto_fix","owner":"eneflorian1","repo":"usa-app","issue":1}</GH_ISSUES_JSON>
+
+PROCESE (management procese background):
+<PROCESS_JSON>{"action":"list"}</PROCESS_JSON>
+<PROCESS_JSON>{"action":"spawn","command":"npm test"}</PROCESS_JSON>`;
 }
 
 // ===================== HELPERS =====================
@@ -131,6 +146,9 @@ function cleanAllTags(text) {
         .replace(/<OBJECT_SCAN_JSON>[\s\S]*?<\/OBJECT_SCAN_JSON>/g, '')
         .replace(/<OBJECT_LEARN_JSON>[\s\S]*?<\/OBJECT_LEARN_JSON>/g, '')
         .replace(/<GITHUB_JSON>[\s\S]*?<\/GITHUB_JSON>/g, '')
+        .replace(/<CODING_JSON>[\s\S]*?<\/CODING_JSON>/g, '')
+        .replace(/<GH_ISSUES_JSON>[\s\S]*?<\/GH_ISSUES_JSON>/g, '')
+        .replace(/<PROCESS_JSON>[\s\S]*?<\/PROCESS_JSON>/g, '')
         .trim();
 }
 
@@ -247,13 +265,15 @@ async function processGlassesRequest(messages, sessionKey = 'default') {
     const objectScanActions = extractJSON(responseText, 'OBJECT_SCAN_JSON');
     const objectLearnActions = extractJSON(responseText, 'OBJECT_LEARN_JSON');
     const githubActions = extractJSON(responseText, 'GITHUB_JSON');
+    const codingActions = extractJSON(responseText, 'CODING_JSON');
+    const ghIssuesActions = extractJSON(responseText, 'GH_ISSUES_JSON');
+    const processActions = extractJSON(responseText, 'PROCESS_JSON');
 
     // Clean response
     const cleanResponse = cleanAllTags(responseText);
 
     // Execute actions
-    // Execute actions
-    const results = { bookings: [], tasks: [], memories: [], whatsapp: [], objectScans: [], objectLearned: [], github: [] };
+    const results = { bookings: [], tasks: [], memories: [], whatsapp: [], objectScans: [], objectLearned: [], github: [], coding: [], ghIssues: [], process: [] };
 
     // Process bookings
     for (const bookingData of bookingActions) {
@@ -356,6 +376,42 @@ async function processGlassesRequest(messages, sessionKey = 'default') {
         } catch (err) {
             results.github.push({ success: false, error: err.message });
             console.error('[Glasses] GitHub error:', err.message);
+        }
+    }
+
+    // Process coding actions
+    for (const codingAction of codingActions) {
+        try {
+            const result = await executeCodingAction(codingAction);
+            results.coding.push({ success: true, ...result });
+            console.log(`[Glasses] Coding ${codingAction.action}:`, JSON.stringify(result).substring(0, 150));
+        } catch (err) {
+            results.coding.push({ success: false, error: err.message });
+            console.error('[Glasses] Coding error:', err.message);
+        }
+    }
+
+    // Process gh-issues actions
+    for (const ghIssueAction of ghIssuesActions) {
+        try {
+            const result = await executeGhIssuesAction(ghIssueAction);
+            results.ghIssues.push({ success: true, ...result });
+            console.log(`[Glasses] GH-Issues ${ghIssueAction.action}:`, JSON.stringify(result).substring(0, 150));
+        } catch (err) {
+            results.ghIssues.push({ success: false, error: err.message });
+            console.error('[Glasses] GH-Issues error:', err.message);
+        }
+    }
+
+    // Process background process actions
+    for (const procAction of processActions) {
+        try {
+            const result = executeProcessAction(procAction);
+            results.process.push({ success: true, ...result });
+            console.log(`[Glasses] Process ${procAction.action}`);
+        } catch (err) {
+            results.process.push({ success: false, error: err.message });
+            console.error('[Glasses] Process error:', err.message);
         }
     }
 

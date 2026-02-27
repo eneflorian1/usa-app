@@ -2,6 +2,9 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const mongoose = require('mongoose');
 const { executeGitHubAction } = require('./githubService');
 const { executeCronAction } = require('./cronService');
+const { executeCodingAction } = require('./codingAgentService');
+const { executeGhIssuesAction } = require('./ghIssuesService');
+const { executeProcessAction } = require('./processManagerService');
 
 /**
  * ReAct Orchestrator Service
@@ -42,6 +45,22 @@ Pentru GITHUB (operații GitHub — issues, PRs, CI status):
 
 Pentru ESCALARE (când detectezi frustrare sau situație complexă):
 <ESCALATE_JSON>{"reason":"Motivul escaladării","priority":"high"}</ESCALATE_JSON>
+
+Pentru CODING (task-uri de cod — analiză, fix, review PR):
+<CODING_JSON>{"action":"analyze","files":["backend/server.js"],"question":"Ce face acest fișier?"}</CODING_JSON>
+<CODING_JSON>{"action":"execute","task":"Adaugă error handling","targetFiles":["backend/server.js"]}</CODING_JSON>
+<CODING_JSON>{"action":"review_pr","owner":"eneflorian1","repo":"usa-app","pr":1}</CODING_JSON>
+
+Pentru GH-ISSUES (auto-fix issues de pe GitHub):
+<GH_ISSUES_JSON>{"action":"analyze","owner":"eneflorian1","repo":"usa-app","issue":1}</GH_ISSUES_JSON>
+<GH_ISSUES_JSON>{"action":"auto_fix","owner":"eneflorian1","repo":"usa-app","issue":1}</GH_ISSUES_JSON>
+<GH_ISSUES_JSON>{"action":"batch_fix","owner":"eneflorian1","repo":"usa-app","label":"bug"}</GH_ISSUES_JSON>
+
+Pentru PROCESE (management procese background):
+<PROCESS_JSON>{"action":"spawn","command":"npm test","label":"Run tests"}</PROCESS_JSON>
+<PROCESS_JSON>{"action":"list"}</PROCESS_JSON>
+<PROCESS_JSON>{"action":"log","sessionId":"abc","tail":20}</PROCESS_JSON>
+<PROCESS_JSON>{"action":"kill","sessionId":"abc"}</PROCESS_JSON>
 
 Pentru CRON JOBS (programare acțiuni recurente):
 <CRON_JSON>{"action":"create","name":"Morning reminder","cron":"0 8 * * *","type":"notification","payload":{"message":"Time to start the day!"}}</CRON_JSON>
@@ -99,18 +118,26 @@ function cleanAllTags(text) {
         .replace(/<TASK_JSON>[\s\S]*?<\/TASK_JSON>/g, '')
         .replace(/<ESCALATE_JSON>[\s\S]*?<\/ESCALATE_JSON>/g, '')
         .replace(/<GITHUB_JSON>[\s\S]*?<\/GITHUB_JSON>/g, '')
+        .replace(/<CODING_JSON>[\s\S]*?<\/CODING_JSON>/g, '')
+        .replace(/<GH_ISSUES_JSON>[\s\S]*?<\/GH_ISSUES_JSON>/g, '')
+        .replace(/<PROCESS_JSON>[\s\S]*?<\/PROCESS_JSON>/g, '')
         .replace(/<CRON_JSON>[\s\S]*?<\/CRON_JSON>/g, '')
         .trim();
 }
 
-function detectIntent(text, bookingData, taskData, escalateData, githubData, cronData) {
+function detectIntent(text, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData) {
     if (escalateData) return 'escalate';
+    if (codingData) return 'coding';
+    if (ghIssuesData) return 'gh-issues';
+    if (processData) return 'process';
     if (cronData) return 'cron';
     if (githubData) return 'github';
     if (bookingData) return 'booking';
     if (taskData) return 'planner';
-    // Simple keyword detection as fallback
     const lower = text.toLowerCase();
+    if (/cod|code|fix|bug|refactor|review.*pr|analize.*cod|implementea|debug/.test(lower)) return 'coding';
+    if (/auto.?fix|repar.*issue|fixeaz.*issue|batch.*fix/.test(lower)) return 'gh-issues';
+    if (/proces|session|spawn|background|kill.*proc|oprește.*proc/.test(lower)) return 'process';
     if (/cron|schedul|recurent|programea|repeat|remind.*every|amintește.*fiecare|în fiecare|la fiecare/.test(lower)) return 'cron';
     if (/github|issue|pull.?request|\bPR\b|commit|CI|workflow|repo/.test(lower)) return 'github';
     if (/rezerv|book|camer|cazare|check.?in|programare/.test(lower)) return 'booking';
@@ -151,7 +178,10 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
     const escalateData = extractJSON(responseText, 'ESCALATE_JSON');
     const githubData = extractJSON(responseText, 'GITHUB_JSON');
     const cronData = extractJSON(responseText, 'CRON_JSON');
-    const intent = detectIntent(userMessage, bookingData, taskData, escalateData, githubData, cronData);
+    const codingData = extractJSON(responseText, 'CODING_JSON');
+    const ghIssuesData = extractJSON(responseText, 'GH_ISSUES_JSON');
+    const processData = extractJSON(responseText, 'PROCESS_JSON');
+    const intent = detectIntent(userMessage, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData);
 
     // Clean response
     responseText = cleanAllTags(responseText);
@@ -162,6 +192,9 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
     let escalationResult = null;
     let githubResult = null;
     let cronResult = null;
+    let codingResult = null;
+    let ghIssuesResult = null;
+    let processResult = null;
 
     // Process booking
     if (bookingData && bookingData.guestName && bookingData.checkIn && bookingData.checkOut) {
@@ -254,6 +287,39 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
         }
     }
 
+    // Process Coding action
+    if (codingData) {
+        try {
+            codingResult = await executeCodingAction(codingData);
+            console.log('[Orchestrator] Coding action:', codingData.action, '→', JSON.stringify(codingResult).substring(0, 200));
+        } catch (err) {
+            console.error('[Orchestrator] Coding error:', err.message);
+            codingResult = { error: err.message };
+        }
+    }
+
+    // Process GH-Issues action
+    if (ghIssuesData) {
+        try {
+            ghIssuesResult = await executeGhIssuesAction(ghIssuesData);
+            console.log('[Orchestrator] GH-Issues action:', ghIssuesData.action, '→', JSON.stringify(ghIssuesResult).substring(0, 200));
+        } catch (err) {
+            console.error('[Orchestrator] GH-Issues error:', err.message);
+            ghIssuesResult = { error: err.message };
+        }
+    }
+
+    // Process background process action
+    if (processData) {
+        try {
+            processResult = executeProcessAction(processData);
+            console.log('[Orchestrator] Process action:', processData.action);
+        } catch (err) {
+            console.error('[Orchestrator] Process error:', err.message);
+            processResult = { error: err.message };
+        }
+    }
+
     // 6. Save to history
     chat.messages.push({ role: 'user', content: userMessage });
     chat.messages.push({ role: 'model', content: responseText });
@@ -270,7 +336,10 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
         tasks: taskResult,
         escalation: escalationResult,
         github: githubResult,
-        cron: cronResult
+        cron: cronResult,
+        coding: codingResult,
+        ghIssues: ghIssuesResult,
+        process: processResult
     };
 }
 

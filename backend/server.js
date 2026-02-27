@@ -717,6 +717,148 @@ app.get('/api/github/repo/:owner/:repo', async (req, res) => {
   }
 });
 
+// ===================== PROCESS MANAGER ROUTES =====================
+
+const processManager = require('./processManagerService');
+const codingAgent = require('./codingAgentService');
+const ghIssues = require('./ghIssuesService');
+
+// List all processes
+app.get('/api/processes', (req, res) => {
+  res.json(processManager.listProcesses());
+});
+
+// Spawn a new process
+app.post('/api/processes', (req, res) => {
+  try {
+    const { command, cwd, timeout, label } = req.body;
+    if (!command) return res.status(400).json({ error: 'command is required' });
+    const result = processManager.spawnProcess(command, { cwd, timeout, label });
+    res.status(201).json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get process status
+app.get('/api/processes/:id', (req, res) => {
+  const proc = processManager.getProcess(req.params.id);
+  if (!proc) return res.status(404).json({ error: 'Session not found' });
+  res.json(proc);
+});
+
+// Get process log
+app.get('/api/processes/:id/log', (req, res) => {
+  const tail = req.query.tail ? parseInt(req.query.tail) : 50;
+  const log = processManager.getProcessLog(req.params.id, tail);
+  if (!log) return res.status(404).json({ error: 'Session not found' });
+  res.json(log);
+});
+
+// Send input to process
+app.post('/api/processes/:id/input', (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text) return res.status(400).json({ error: 'text is required' });
+    const result = processManager.sendInput(req.params.id, text);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Kill process
+app.delete('/api/processes/:id', (req, res) => {
+  try {
+    const result = processManager.killProcess(req.params.id);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===================== CODING AGENT ROUTES =====================
+
+// Execute coding task
+app.post('/api/coding/task', async (req, res) => {
+  try {
+    const { task, targetFiles, workDir, autoApply } = req.body;
+    if (!task) return res.status(400).json({ error: 'task description is required' });
+    const result = await codingAgent.executeTask(task, { targetFiles, workDir, autoApply });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Analyze code files
+app.post('/api/coding/analyze', async (req, res) => {
+  try {
+    const { files, workDir, question } = req.body;
+    if (!files || !Array.isArray(files)) return res.status(400).json({ error: 'files array is required' });
+    const result = await codingAgent.analyzeCode(files, workDir, question);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Review PR
+app.post('/api/coding/review', async (req, res) => {
+  try {
+    const { owner, repo, pr } = req.body;
+    if (!owner || !repo || !pr) return res.status(400).json({ error: 'owner, repo, and pr are required' });
+    const result = await codingAgent.reviewPR(owner, repo, pr);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get coding task status
+app.get('/api/coding/task/:taskId', (req, res) => {
+  const status = codingAgent.getTaskStatus(req.params.taskId);
+  if (!status) return res.status(404).json({ error: 'Task not found' });
+  res.json(status);
+});
+
+// ===================== GH-ISSUES AUTO-FIX ROUTES =====================
+
+// Analyze issue (confidence check)
+app.post('/api/github/analyze-issue/:owner/:repo/:number', async (req, res) => {
+  try {
+    const { owner, repo, number } = req.params;
+    const result = await ghIssues.analyzeIssue(owner, repo, parseInt(number));
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Auto-fix issue
+app.post('/api/github/auto-fix/:owner/:repo/:number', async (req, res) => {
+  try {
+    const { owner, repo, number } = req.params;
+    const { workDir, minConfidence } = req.body || {};
+    const result = await ghIssues.autoFixIssue(owner, repo, parseInt(number), { workDir, minConfidence });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Batch fix issues
+app.post('/api/github/batch-fix/:owner/:repo', async (req, res) => {
+  try {
+    const { owner, repo } = req.params;
+    const { label, limit, workDir } = req.body || {};
+    const result = await ghIssues.batchFixIssues(owner, repo, { label, limit, workDir });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ===================== HOUSE OBJECT TRACKING ROUTES =====================
 
 // Object tracking toggle
