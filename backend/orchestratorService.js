@@ -1,5 +1,7 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const mongoose = require('mongoose');
+const { executeGitHubAction } = require('./githubService');
+const { executeCronAction } = require('./cronService');
 
 /**
  * ReAct Orchestrator Service
@@ -29,8 +31,36 @@ Pentru REZERVARE (când ai TOATE datele):
 Pentru TASK:
 <TASK_JSON>{"title":"Titlu task","description":"Descriere","dueDate":"2026-03-05T09:00:00","priority":"medium"}</TASK_JSON>
 
+Pentru GITHUB (operații GitHub — issues, PRs, CI status):
+<GITHUB_JSON>{"action":"list_issues","owner":"eneflorian1","repo":"usa-app"}</GITHUB_JSON>
+<GITHUB_JSON>{"action":"create_issue","owner":"eneflorian1","repo":"usa-app","title":"Bug: descriere","body":"Detalii"}</GITHUB_JSON>
+<GITHUB_JSON>{"action":"list_prs","owner":"eneflorian1","repo":"usa-app"}</GITHUB_JSON>
+<GITHUB_JSON>{"action":"pr_status","owner":"eneflorian1","repo":"usa-app","pr":1}</GITHUB_JSON>
+<GITHUB_JSON>{"action":"ci_status","owner":"eneflorian1","repo":"usa-app"}</GITHUB_JSON>
+<GITHUB_JSON>{"action":"close_issue","owner":"eneflorian1","repo":"usa-app","issue":1}</GITHUB_JSON>
+<GITHUB_JSON>{"action":"repo_info","owner":"eneflorian1","repo":"usa-app"}</GITHUB_JSON>
+
 Pentru ESCALARE (când detectezi frustrare sau situație complexă):
 <ESCALATE_JSON>{"reason":"Motivul escaladării","priority":"high"}</ESCALATE_JSON>
+
+Pentru CRON JOBS (programare acțiuni recurente):
+<CRON_JSON>{"action":"create","name":"Morning reminder","cron":"0 8 * * *","type":"notification","payload":{"message":"Time to start the day!"}}</CRON_JSON>
+<CRON_JSON>{"action":"create","name":"Daily task","cron":"0 9 * * 1-5","type":"task","payload":{"title":"Check emails","priority":"medium"}}</CRON_JSON>
+<CRON_JSON>{"action":"list"}</CRON_JSON>
+<CRON_JSON>{"action":"pause","id":"..."}</CRON_JSON>
+<CRON_JSON>{"action":"resume","id":"..."}</CRON_JSON>
+<CRON_JSON>{"action":"delete","id":"..."}</CRON_JSON>
+
+EXPRESII CRON COMUNE:
+- "în fiecare minut" → * * * * *
+- "la fiecare oră" → 0 * * * *
+- "în fiecare zi la ora 8" → 0 8 * * *
+- "în fiecare zi la ora 9 dimineața" → 0 9 * * *
+- "luni-vineri la 8" → 0 8 * * 1-5
+- "în fiecare luni" → 0 0 * * 1
+- "prima zi din lună" → 0 0 1 * *
+- "la fiecare 5 minute" → */5 * * * *
+- "la fiecare 30 minute" → */30 * * * *
 
 COMPORTAMENT:
 - Dacă utilizatorul salută → răspunde prietenos, fără TOOL
@@ -68,15 +98,21 @@ function cleanAllTags(text) {
         .replace(/<BOOKING_JSON>[\s\S]*?<\/BOOKING_JSON>/g, '')
         .replace(/<TASK_JSON>[\s\S]*?<\/TASK_JSON>/g, '')
         .replace(/<ESCALATE_JSON>[\s\S]*?<\/ESCALATE_JSON>/g, '')
+        .replace(/<GITHUB_JSON>[\s\S]*?<\/GITHUB_JSON>/g, '')
+        .replace(/<CRON_JSON>[\s\S]*?<\/CRON_JSON>/g, '')
         .trim();
 }
 
-function detectIntent(text, bookingData, taskData, escalateData) {
+function detectIntent(text, bookingData, taskData, escalateData, githubData, cronData) {
     if (escalateData) return 'escalate';
+    if (cronData) return 'cron';
+    if (githubData) return 'github';
     if (bookingData) return 'booking';
     if (taskData) return 'planner';
     // Simple keyword detection as fallback
     const lower = text.toLowerCase();
+    if (/cron|schedul|recurent|programea|repeat|remind.*every|amintește.*fiecare|în fiecare|la fiecare/.test(lower)) return 'cron';
+    if (/github|issue|pull.?request|\bPR\b|commit|CI|workflow|repo/.test(lower)) return 'github';
     if (/rezerv|book|camer|cazare|check.?in|programare/.test(lower)) return 'booking';
     if (/task|sarcin|plan|todo|treab/.test(lower)) return 'planner';
     return 'general';
@@ -113,7 +149,9 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
     const bookingData = extractJSON(responseText, 'BOOKING_JSON');
     const taskData = extractJSON(responseText, 'TASK_JSON');
     const escalateData = extractJSON(responseText, 'ESCALATE_JSON');
-    const intent = detectIntent(userMessage, bookingData, taskData, escalateData);
+    const githubData = extractJSON(responseText, 'GITHUB_JSON');
+    const cronData = extractJSON(responseText, 'CRON_JSON');
+    const intent = detectIntent(userMessage, bookingData, taskData, escalateData, githubData, cronData);
 
     // Clean response
     responseText = cleanAllTags(responseText);
@@ -122,6 +160,8 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
     let bookingResult = null;
     let taskResult = null;
     let escalationResult = null;
+    let githubResult = null;
+    let cronResult = null;
 
     // Process booking
     if (bookingData && bookingData.guestName && bookingData.checkIn && bookingData.checkOut) {
@@ -192,6 +232,28 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
         }
     }
 
+    // Process GitHub action
+    if (githubData) {
+        try {
+            githubResult = await executeGitHubAction(githubData);
+            console.log('[Orchestrator] GitHub action:', githubData.action, '→', JSON.stringify(githubResult).substring(0, 200));
+        } catch (err) {
+            console.error('[Orchestrator] GitHub error:', err.message);
+            githubResult = { error: err.message };
+        }
+    }
+
+    // Process Cron action
+    if (cronData) {
+        try {
+            cronResult = await executeCronAction(cronData);
+            console.log('[Orchestrator] Cron action:', cronData.action, '→', cronResult.message);
+        } catch (err) {
+            console.error('[Orchestrator] Cron error:', err.message);
+            cronResult = { success: false, message: err.message };
+        }
+    }
+
     // 6. Save to history
     chat.messages.push({ role: 'user', content: userMessage });
     chat.messages.push({ role: 'model', content: responseText });
@@ -206,7 +268,9 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
         reply: responseText,
         booking: bookingResult,
         tasks: taskResult,
-        escalation: escalationResult
+        escalation: escalationResult,
+        github: githubResult,
+        cron: cronResult
     };
 }
 

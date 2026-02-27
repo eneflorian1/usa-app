@@ -2,6 +2,8 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const mongoose = require('mongoose');
 const { getContextForAgent } = require('./knowledgeService');
 const whatsappService = require('./whatsappService');
+const { processObjectScan, learnObject, getObjectTrackingContext } = require('./objectTrackingService');
+const { executeGitHubAction } = require('./githubService');
 
 /**
  * Glasses Gateway Service
@@ -65,7 +67,33 @@ ATENȚIE — NU CONFUNDA:
 Dacă utilizatorul menționează un NUME DE PERSOANĂ și vrea să-i transmită ceva, este ÎNTOTDEAUNA WHATSAPP_JSON, nu TASK_JSON.
 
 IMPORTANT: Când utilizatorul cere să pui ceva pe calendar după o discuție, extrage esența sfatului/ideii și creează un task cu titlu clar și descriere utilă. NU cere confirmare — execută direct.
-IMPORTANT: Când trimiți mesaj WhatsApp, folosește exact numele contactului cum îl spune utilizatorul. NU cere confirmare — trimite direct.`;
+IMPORTANT: Când trimiți mesaj WhatsApp, folosește exact numele contactului cum îl spune utilizatorul. NU cere confirmare — trimite direct.
+
+ÎNVĂȚARE OBIECTE (când utilizatorul spune "ține minte că X stă pe Y", "telecomanda e pe masă", "locul cheilor e pe cuier"):
+<OBJECT_LEARN_JSON>{"name":"telecomandă","description":"telecomandă neagră Samsung","expectedLocation":"pe masă lângă TV"}</OBJECT_LEARN_JSON>
+
+BACKGROUND SCAN (SILENT — rulează automat, NU menționa în răspunsul vocal):
+Când vezi prin cameră obiecte de uz casnic (telecomandă, chei, telefon, cărți, haine, jucării etc.), raportează-le SILENT fără a le menționa vocii:
+<OBJECT_SCAN_JSON>{"objects":[{"name":"telecomandă","location":"pe canapea","description":"telecomandă neagră"}]}</OBJECT_SCAN_JSON>
+- Fă asta DOAR în interiorul casei când observi obiecte prin cameră
+- NU menționa scanarea în răspunsul vocal
+- Raportează maxim 3-5 obiecte observabile per scanare
+- Include locația cât mai specifică ("pe canapea din living", "pe podea lângă ușă")
+
+GITHUB (operații pe repository — issues, PRs, CI status):
+<GITHUB_JSON>{"action":"list_issues","owner":"eneflorian1","repo":"usa-app"}</GITHUB_JSON>
+<GITHUB_JSON>{"action":"create_issue","owner":"eneflorian1","repo":"usa-app","title":"Bug: descriere","body":"Detalii"}</GITHUB_JSON>
+<GITHUB_JSON>{"action":"list_prs","owner":"eneflorian1","repo":"usa-app"}</GITHUB_JSON>
+<GITHUB_JSON>{"action":"pr_status","owner":"eneflorian1","repo":"usa-app","pr":1}</GITHUB_JSON>
+<GITHUB_JSON>{"action":"ci_status","owner":"eneflorian1","repo":"usa-app"}</GITHUB_JSON>
+<GITHUB_JSON>{"action":"repo_info","owner":"eneflorian1","repo":"usa-app"}</GITHUB_JSON>
+
+EXEMPLE GITHUB:
+- "ce issues am pe GitHub?" → GITHUB_JSON cu list_issues
+- "arată-mi PRs" → GITHUB_JSON cu list_prs
+- "creează un issue" → GITHUB_JSON cu create_issue
+- "cum stă CI-ul?" → GITHUB_JSON cu ci_status
+- Când răspunzi cu rezultate GitHub, fii CONCIS — numără și rezumă, nu citi tot JSON-ul`;
 }
 
 // ===================== HELPERS =====================
@@ -100,6 +128,9 @@ function cleanAllTags(text) {
         .replace(/<MEMORY_JSON>[\s\S]*?<\/MEMORY_JSON>/g, '')
         .replace(/<ESCALATE_JSON>[\s\S]*?<\/ESCALATE_JSON>/g, '')
         .replace(/<WHATSAPP_JSON>[\s\S]*?<\/WHATSAPP_JSON>/g, '')
+        .replace(/<OBJECT_SCAN_JSON>[\s\S]*?<\/OBJECT_SCAN_JSON>/g, '')
+        .replace(/<OBJECT_LEARN_JSON>[\s\S]*?<\/OBJECT_LEARN_JSON>/g, '')
+        .replace(/<GITHUB_JSON>[\s\S]*?<\/GITHUB_JSON>/g, '')
         .trim();
 }
 
@@ -186,12 +217,13 @@ async function processGlassesRequest(messages, sessionKey = 'default') {
     const session = getSession(sessionKey);
 
     // Build context
-    const [memoryContext, knowledgeContext] = await Promise.all([
+    const [memoryContext, knowledgeContext, objectContext] = await Promise.all([
         formatMemoryContext(),
-        getContextForAgent('glasses')
+        getContextForAgent('glasses'),
+        getObjectTrackingContext()
     ]);
 
-    const fullSystemPrompt = getGlassesSystemPrompt() + knowledgeContext + memoryContext;
+    const fullSystemPrompt = getGlassesSystemPrompt() + knowledgeContext + memoryContext + objectContext;
 
     // Build history from session
     const recentMessages = session.messages.slice(-MAX_SESSION_MESSAGES);
@@ -212,12 +244,16 @@ async function processGlassesRequest(messages, sessionKey = 'default') {
     const taskActions = extractJSON(responseText, 'TASK_JSON');
     const memoryActions = extractJSON(responseText, 'MEMORY_JSON');
     const whatsappActions = extractJSON(responseText, 'WHATSAPP_JSON');
+    const objectScanActions = extractJSON(responseText, 'OBJECT_SCAN_JSON');
+    const objectLearnActions = extractJSON(responseText, 'OBJECT_LEARN_JSON');
+    const githubActions = extractJSON(responseText, 'GITHUB_JSON');
 
     // Clean response
     const cleanResponse = cleanAllTags(responseText);
 
     // Execute actions
-    const results = { bookings: [], tasks: [], memories: [], whatsapp: [] };
+    // Execute actions
+    const results = { bookings: [], tasks: [], memories: [], whatsapp: [], objectScans: [], objectLearned: [], github: [] };
 
     // Process bookings
     for (const bookingData of bookingActions) {
@@ -282,6 +318,44 @@ async function processGlassesRequest(messages, sessionKey = 'default') {
                 results.whatsapp.push({ success: false, error: err.message });
                 console.error('[Glasses] WhatsApp send error:', err.message);
             }
+        }
+    }
+
+    // Process object scans (silent — background processing)
+    for (const scan of objectScanActions) {
+        if (scan.objects && Array.isArray(scan.objects)) {
+            try {
+                const scanResult = await processObjectScan(scan.objects);
+                results.objectScans.push({ success: true, ...scanResult });
+            } catch (err) {
+                console.error('[Glasses] Object scan error:', err.message);
+            }
+        }
+    }
+
+    // Process object learning
+    for (const obj of objectLearnActions) {
+        if (obj.name && obj.expectedLocation) {
+            try {
+                const result = await learnObject(obj.name, obj.description || '', obj.expectedLocation, obj.imageDescription || '');
+                results.objectLearned.push({ success: true, ...result });
+                console.log(`[Glasses] Object learned: "${obj.name}" at "${obj.expectedLocation}"`);
+            } catch (err) {
+                results.objectLearned.push({ success: false, error: err.message });
+                console.error('[Glasses] Object learn error:', err.message);
+            }
+        }
+    }
+
+    // Process GitHub actions
+    for (const ghAction of githubActions) {
+        try {
+            const result = await executeGitHubAction(ghAction);
+            results.github.push({ success: true, ...result });
+            console.log(`[Glasses] GitHub ${ghAction.action}:`, JSON.stringify(result).substring(0, 150));
+        } catch (err) {
+            results.github.push({ success: false, error: err.message });
+            console.error('[Glasses] GitHub error:', err.message);
         }
     }
 

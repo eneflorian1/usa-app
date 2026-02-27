@@ -7,6 +7,9 @@ const { processAgentMessage } = require('./agentChatService');
 const { processPlannerMessage } = require('./plannerAgentService');
 const { processOrchestratorMessage } = require('./orchestratorService');
 const { processGlassesRequest, validateGlassesToken, getRecentMemories, getAllMemories, saveMemory } = require('./glassesGatewayService');
+const { learnObject, approveBatch, dismissBatch } = require('./objectTrackingService');
+const githubService = require('./githubService');
+const cronService = require('./cronService');
 const crypto = require('crypto');
 
 const app = express();
@@ -124,6 +127,59 @@ const PlannerTaskSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 const PlannerTask = mongoose.model('PlannerTask', PlannerTaskSchema);
+
+const HouseObjectSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  description: { type: String, default: '' },
+  expectedLocation: { type: String, required: true },
+  imageDescription: { type: String, default: '' },
+  embedding: { type: [Number], default: [] },
+  lastSeen: { type: Date, default: Date.now },
+  lastSeenLocation: { type: String, default: '' },
+  timesDisplaced: { type: Number, default: 0 },
+  createdAt: { type: Date, default: Date.now }
+});
+const HouseObject = mongoose.model('HouseObject', HouseObjectSchema);
+
+const DisplacedObjectSchema = new mongoose.Schema({
+  houseObjectId: { type: mongoose.Schema.Types.ObjectId, ref: 'HouseObject' },
+  objectName: { type: String, required: true },
+  expectedLocation: { type: String, required: true },
+  foundLocation: { type: String, required: true },
+  status: { type: String, enum: ['pending', 'added_to_calendar', 'resolved'], default: 'pending' },
+  detectedAt: { type: Date, default: Date.now }
+});
+const DisplacedObject = mongoose.model('DisplacedObject', DisplacedObjectSchema);
+
+const CleanupBatchSchema = new mongoose.Schema({
+  displacedObjects: [{ type: mongoose.Schema.Types.ObjectId, ref: 'DisplacedObject' }],
+  status: { type: String, enum: ['pending', 'approved', 'dismissed'], default: 'pending' },
+  notifiedAt: { type: Date, default: Date.now }
+});
+const CleanupBatch = mongoose.model('CleanupBatch', CleanupBatchSchema);
+
+const CronJobSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  cronExpression: { type: String, required: true },
+  actionType: { type: String, enum: ['notification', 'task', 'whatsapp', 'http'], required: true },
+  actionPayload: { type: mongoose.Schema.Types.Mixed, default: {} },
+  status: { type: String, enum: ['active', 'paused'], default: 'active' },
+  lastRun: { type: Date, default: null },
+  nextRun: { type: Date, default: null },
+  runCount: { type: Number, default: 0 },
+  createdAt: { type: Date, default: Date.now }
+});
+const CronJob = mongoose.model('CronJob', CronJobSchema);
+
+const CronJobLogSchema = new mongoose.Schema({
+  cronJobId: { type: mongoose.Schema.Types.ObjectId, ref: 'CronJob' },
+  jobName: String,
+  actionType: String,
+  result: { type: String, enum: ['success', 'error'], default: 'success' },
+  output: String,
+  executedAt: { type: Date, default: Date.now }
+});
+const CronJobLog = mongoose.model('CronJobLog', CronJobLogSchema);
 
 // API Routes
 app.get('/api/agent/config', async (req, res) => {
@@ -543,6 +599,294 @@ app.post('/api/whatsapp/send', async (req, res) => {
   }
 });
 
+// ===================== GITHUB ROUTES =====================
+
+// GitHub token settings
+app.get('/api/settings/github-token', async (req, res) => {
+  try {
+    const setting = await Setting.findOne({ key: 'github_token' });
+    if (!setting || !setting.value) {
+      return res.json({ token: null, hasToken: false });
+    }
+    const val = setting.value;
+    const masked = val.length > 10 ? val.slice(0, 4) + '...' + val.slice(-4) : val;
+    res.json({ token: masked, hasToken: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/settings/github-token', async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ error: 'Token is required' });
+    await Setting.findOneAndUpdate(
+      { key: 'github_token' },
+      { value: token, updatedAt: Date.now() },
+      { upsert: true, new: true }
+    );
+    res.json({ message: 'GitHub token saved successfully' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GitHub API — Issues
+app.get('/api/github/issues/:owner/:repo', async (req, res) => {
+  try {
+    const { owner, repo } = req.params;
+    const issues = await githubService.listIssues(owner, repo, {
+      state: req.query.state,
+      label: req.query.label,
+      limit: req.query.limit ? parseInt(req.query.limit) : undefined
+    });
+    res.json(issues);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/github/issues/:owner/:repo', async (req, res) => {
+  try {
+    const { owner, repo } = req.params;
+    const { title, body, labels } = req.body;
+    if (!title) return res.status(400).json({ error: 'Title is required' });
+    const issue = await githubService.createIssue(owner, repo, title, body, labels);
+    res.status(201).json(issue);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/github/issues/:owner/:repo/:number/close', async (req, res) => {
+  try {
+    const { owner, repo, number } = req.params;
+    const result = await githubService.closeIssue(owner, repo, parseInt(number));
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GitHub API — Pull Requests
+app.get('/api/github/prs/:owner/:repo', async (req, res) => {
+  try {
+    const { owner, repo } = req.params;
+    const prs = await githubService.listPRs(owner, repo, {
+      state: req.query.state,
+      limit: req.query.limit ? parseInt(req.query.limit) : undefined
+    });
+    res.json(prs);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/github/prs/:owner/:repo/:number', async (req, res) => {
+  try {
+    const { owner, repo, number } = req.params;
+    const pr = await githubService.getPRStatus(owner, repo, parseInt(number));
+    res.json(pr);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GitHub API — CI/Workflow Runs
+app.get('/api/github/ci/:owner/:repo', async (req, res) => {
+  try {
+    const { owner, repo } = req.params;
+    const runs = await githubService.listCIRuns(owner, repo, {
+      limit: req.query.limit ? parseInt(req.query.limit) : undefined,
+      branch: req.query.branch
+    });
+    res.json(runs);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GitHub API — Repo Info
+app.get('/api/github/repo/:owner/:repo', async (req, res) => {
+  try {
+    const { owner, repo } = req.params;
+    const info = await githubService.getRepoInfo(owner, repo);
+    res.json(info);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===================== HOUSE OBJECT TRACKING ROUTES =====================
+
+// Object tracking toggle
+app.get('/api/settings/object-tracking', async (req, res) => {
+  try {
+    const setting = await Setting.findOne({ key: 'object_tracking_enabled' });
+    res.json({ enabled: setting?.value === 'true' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/settings/object-tracking', async (req, res) => {
+  try {
+    const { enabled } = req.body;
+    await Setting.findOneAndUpdate(
+      { key: 'object_tracking_enabled' },
+      { value: enabled ? 'true' : 'false', updatedAt: Date.now() },
+      { upsert: true, new: true }
+    );
+    res.json({ enabled, message: `Object tracking ${enabled ? 'enabled' : 'disabled'}` });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// House Objects CRUD
+app.get('/api/house-objects', async (req, res) => {
+  try {
+    const objects = await HouseObject.find().sort({ lastSeen: -1 });
+    res.json(objects);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/house-objects', async (req, res) => {
+  try {
+    const { name, description, expectedLocation, imageDescription } = req.body;
+    if (!name || !expectedLocation) {
+      return res.status(400).json({ error: 'name and expectedLocation are required' });
+    }
+    const result = await learnObject(name, description || '', expectedLocation, imageDescription || '');
+    res.status(201).json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/api/house-objects/:id', async (req, res) => {
+  try {
+    const obj = await HouseObject.findByIdAndUpdate(req.params.id, { ...req.body, lastSeen: Date.now() }, { new: true });
+    if (!obj) return res.status(404).json({ error: 'Object not found' });
+    res.json(obj);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/house-objects/:id', async (req, res) => {
+  try {
+    const obj = await HouseObject.findByIdAndDelete(req.params.id);
+    if (!obj) return res.status(404).json({ error: 'Object not found' });
+    // Also cleanup related displacements
+    await DisplacedObject.deleteMany({ houseObjectId: req.params.id });
+    res.json({ message: 'Object deleted', object: obj });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Displaced Objects
+app.get('/api/displaced-objects', async (req, res) => {
+  try {
+    const status = req.query.status || 'pending';
+    const displaced = await DisplacedObject.find({ status }).sort({ detectedAt: -1 });
+    res.json(displaced);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/api/displaced-objects/:id/resolve', async (req, res) => {
+  try {
+    const d = await DisplacedObject.findByIdAndUpdate(req.params.id, { status: 'resolved' }, { new: true });
+    if (!d) return res.status(404).json({ error: 'Not found' });
+    res.json(d);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Cleanup Batches
+app.get('/api/cleanup-batches', async (req, res) => {
+  try {
+    const batches = await CleanupBatch.find().populate('displacedObjects').sort({ notifiedAt: -1 });
+    res.json(batches);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/cleanup-batches/pending', async (req, res) => {
+  try {
+    const batch = await CleanupBatch.findOne({ status: 'pending' }).populate('displacedObjects');
+    res.json(batch);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/cleanup-batches/:id/approve', async (req, res) => {
+  try {
+    const result = await approveBatch(req.params.id);
+    res.json({ message: `Created ${result.tasks.length} tasks`, ...result });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/cleanup-batches/:id/dismiss', async (req, res) => {
+  try {
+    const batch = await dismissBatch(req.params.id);
+    res.json({ message: 'Batch dismissed', batch });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ===================== CRON JOB ROUTES =====================
+
+app.get('/api/cron-jobs', async (req, res) => {
+  try {
+    const jobs = await cronService.listCronJobs();
+    res.json(jobs);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/cron-jobs', async (req, res) => {
+  try {
+    const { name, cronExpression, actionType, actionPayload } = req.body;
+    if (!name || !cronExpression || !actionType) {
+      return res.status(400).json({ error: 'name, cronExpression, and actionType are required' });
+    }
+    const job = await cronService.createCronJob(name, cronExpression, actionType, actionPayload || {});
+    res.status(201).json(job);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.patch('/api/cron-jobs/:id', async (req, res) => {
+  try {
+    const job = await CronJob.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    if (!job) return res.status(404).json({ error: 'Cron job not found' });
+    res.json(job);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/cron-jobs/:id', async (req, res) => {
+  try {
+    const job = await cronService.deleteCronJob(req.params.id);
+    res.json({ message: 'Cron job deleted', job });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/cron-jobs/:id/pause', async (req, res) => {
+  try {
+    const job = await cronService.pauseCronJob(req.params.id);
+    res.json({ message: 'Cron job paused', job });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/cron-jobs/:id/resume', async (req, res) => {
+  try {
+    const job = await cronService.resumeCronJob(req.params.id);
+    res.json({ message: 'Cron job resumed', job });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/cron-jobs/:id/logs', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 20;
+    const logs = await cronService.getJobLogs(req.params.id, limit);
+    res.json(logs);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/cron-jobs/logs/recent', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 30;
+    const logs = await cronService.getRecentLogs(limit);
+    res.json(logs);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ===================== GLASSES GATEWAY ROUTES =====================
 
 // OpenAI-compatible endpoint (drop-in replacement for OpenClaw)
@@ -707,6 +1051,14 @@ app.post('/api/glasses/sync-from-vps', async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Backend server is running on http://localhost:${PORT}`);
+  // Restore cron jobs from DB
+  setTimeout(async () => {
+    try {
+      await cronService.restoreJobs();
+    } catch (err) {
+      console.error('[Cron] Failed to restore jobs on startup:', err.message);
+    }
+  }, 1000);
   // Automatically initialize WhatsApp client on server start
   setTimeout(() => {
     whatsappService.initializeWhatsApp();
