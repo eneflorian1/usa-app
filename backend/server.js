@@ -461,7 +461,7 @@ app.patch('/api/escalations/:id', async (req, res) => {
 // Planner Task CRUD Routes
 app.get('/api/planner/tasks', async (req, res) => {
   try {
-    const tasks = await PlannerTask.find().sort({ completed: 1, priority: -1, dueDate: 1 });
+    const tasks = await PlannerTask.find().sort({ completed: 1, createdAt: -1 });
     res.json(tasks);
   } catch (err) {
     res.status(500).json({ error: err.message });
