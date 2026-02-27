@@ -424,9 +424,13 @@ export function useGeminiLive(): UseGeminiLiveReturn {
                 }));
             };
 
-            ws.onmessage = (event) => {
+            ws.onmessage = async (event) => {
                 try {
-                    const json = JSON.parse(event.data as string);
+                    // Browser WebSocket receives Blob, not string
+                    const text = event.data instanceof Blob
+                        ? await event.data.text()
+                        : event.data as string;
+                    const json = JSON.parse(text);
                     handleGeminiMessage(json);
                 } catch (err) {
                     console.error('[GeminiLive] Parse error:', err);
