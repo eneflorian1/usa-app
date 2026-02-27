@@ -6,7 +6,8 @@ async function getGeminiModel(systemInstruction) {
     const setting = await Setting.findOne({ key: 'gemini_api_key' });
     
     if (!setting || !setting.value) {
-        throw new Error('Gemini API key not configured');
+        console.error('Gemini API key not configured. Please set it in the settings.');
+        return null;
     }
     
     // Explicitly initialize the genAI client with the retrieved API key
@@ -30,6 +31,10 @@ async function generateReply(incomingMessage, senderPhone) {
         }
 
         const model = await getGeminiModel(config.systemPrompt);
+        if (!model) {
+            console.error('Cannot generate reply because Gemini model is not available (API key may be missing).');
+            return null;
+        }
         
         // Fetch Conversation History
         const Conversation = mongoose.model('Conversation');
