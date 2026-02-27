@@ -1,6 +1,8 @@
 const express = require('express');
+const http = require('http');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const { Server: SocketIOServer } = require('socket.io');
 require('dotenv').config();
 
 const { processAgentMessage } = require('./agentChatService');
@@ -11,8 +13,14 @@ const { learnObject, approveBatch, dismissBatch } = require('./objectTrackingSer
 const githubService = require('./githubService');
 const cronService = require('./cronService');
 const crypto = require('crypto');
+const { GeminiLiveSession } = require('./geminiLiveService');
 
 const app = express();
+const server = http.createServer(app);
+const io = new SocketIOServer(server, {
+  cors: { origin: '*' },
+  maxHttpBufferSize: 1e7 // 10MB for audio chunks
+});
 const PORT = process.env.PORT || 5000;
 
 app.use(cors());
@@ -1191,7 +1199,70 @@ app.post('/api/glasses/sync-from-vps', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
+// ===================== SOCKET.IO — VOICE MODE =====================
+
+const activeSessions = new Map(); // socketId -> GeminiLiveSession
+
+io.on('connection', (socket) => {
+  console.log(`[Socket.IO] Client connected: ${socket.id}`);
+
+  socket.on('voice:start', async () => {
+    console.log(`[Voice] Starting session for ${socket.id}`);
+
+    // Clean up any existing session
+    const existing = activeSessions.get(socket.id);
+    if (existing) {
+      existing.disconnect();
+      activeSessions.delete(socket.id);
+    }
+
+    const session = new GeminiLiveSession(socket, async (call, sendResponse) => {
+      // Route tool calls through the orchestrator
+      const taskDesc = call.args?.task || JSON.stringify(call.args);
+      console.log(`[Voice] Tool call execute: ${taskDesc.substring(0, 100)}`);
+      try {
+        const result = await processOrchestratorMessage(taskDesc, `voice-${socket.id}`);
+        sendResponse({ result: result.reply || 'Done' });
+      } catch (err) {
+        console.error('[Voice] Tool call error:', err.message);
+        sendResponse({ error: err.message });
+      }
+    });
+
+    activeSessions.set(socket.id, session);
+    const ok = await session.connect();
+    if (!ok) {
+      activeSessions.delete(socket.id);
+    }
+  });
+
+  socket.on('voice:audio', (base64Data) => {
+    const session = activeSessions.get(socket.id);
+    if (session) {
+      session.sendAudio(base64Data);
+    }
+  });
+
+  socket.on('voice:stop', () => {
+    console.log(`[Voice] Stopping session for ${socket.id}`);
+    const session = activeSessions.get(socket.id);
+    if (session) {
+      session.disconnect();
+      activeSessions.delete(socket.id);
+    }
+  });
+
+  socket.on('disconnect', () => {
+    console.log(`[Socket.IO] Client disconnected: ${socket.id}`);
+    const session = activeSessions.get(socket.id);
+    if (session) {
+      session.disconnect();
+      activeSessions.delete(socket.id);
+    }
+  });
+});
+
+server.listen(PORT, () => {
   console.log(`Backend server is running on http://localhost:${PORT}`);
   // Restore cron jobs from DB
   setTimeout(async () => {
