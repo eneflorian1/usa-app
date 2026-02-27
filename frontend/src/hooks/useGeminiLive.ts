@@ -85,6 +85,8 @@ export function useGeminiLive(): UseGeminiLiveReturn {
     const nextPlayTimeRef = useRef(0);
     const isActiveRef = useRef(false);
     const isModelSpeakingRef = useRef(false);
+    const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+    const visibilityHandlerRef = useRef<(() => void) | null>(null);
 
     // Float32 → Int16 (VisionClaw AudioManager)
     const float32ToInt16 = useCallback((f32: Float32Array): Int16Array => {
@@ -307,6 +309,16 @@ export function useGeminiLive(): UseGeminiLiveReturn {
         if (mediaStreamRef.current) { mediaStreamRef.current.getTracks().forEach(t => t.stop()); mediaStreamRef.current = null; }
         if (playbackContextRef.current) { playbackContextRef.current.close().catch(() => { }); playbackContextRef.current = null; }
         if (wsRef.current) { try { wsRef.current.close(); } catch { } wsRef.current = null; }
+        // Release wake lock
+        if (wakeLockRef.current) {
+            wakeLockRef.current.release().catch(() => { });
+            wakeLockRef.current = null;
+        }
+        // Remove visibility handler
+        if (visibilityHandlerRef.current) {
+            document.removeEventListener('visibilitychange', visibilityHandlerRef.current);
+            visibilityHandlerRef.current = null;
+        }
         nextPlayTimeRef.current = 0;
         accumulatedRef.current = new Int16Array(0);
     }, []);
@@ -387,7 +399,40 @@ export function useGeminiLive(): UseGeminiLiveReturn {
             // 4. Setup playback
             playbackContextRef.current = new AudioContext({ sampleRate: OUTPUT_SAMPLE_RATE });
 
-            // 5. Connect WebSocket directly to Gemini Live API
+            // 5. Request Wake Lock to keep screen awake during voice session
+            try {
+                if ('wakeLock' in navigator) {
+                    wakeLockRef.current = await navigator.wakeLock.request('screen');
+                    console.log('[GeminiLive] Wake Lock acquired');
+                }
+            } catch (e) {
+                console.warn('[GeminiLive] Wake Lock failed:', e);
+            }
+
+            // 6. Handle visibility change — resume AudioContext when returning to app
+            const onVisibilityChange = async () => {
+                if (document.visibilityState === 'visible' && isActiveRef.current) {
+                    // Resume audio contexts that got suspended
+                    if (audioContextRef.current?.state === 'suspended') {
+                        await audioContextRef.current.resume();
+                        console.log('[GeminiLive] Mic AudioContext resumed');
+                    }
+                    if (playbackContextRef.current?.state === 'suspended') {
+                        await playbackContextRef.current.resume();
+                        console.log('[GeminiLive] Playback AudioContext resumed');
+                    }
+                    // Re-acquire wake lock (released on visibility hidden)
+                    try {
+                        if ('wakeLock' in navigator && !wakeLockRef.current) {
+                            wakeLockRef.current = await navigator.wakeLock.request('screen');
+                        }
+                    } catch { }
+                }
+            };
+            visibilityHandlerRef.current = onVisibilityChange;
+            document.addEventListener('visibilitychange', onVisibilityChange);
+
+            // 7. Connect WebSocket directly to Gemini Live API
             setSessionState('settingUp');
             const wsUrl = `${GEMINI_WS_URL}?key=${apiKey}`;
             const ws = new WebSocket(wsUrl);
