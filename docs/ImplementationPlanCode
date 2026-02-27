@@ -183,3 +183,19 @@ curl -X POST http://localhost:5000/api/orchestrator/chat -d '{"message":"Analize
 ### Manual
 - Verifică logurile `[ProcessMgr]`, `[CodingAgent]`, `[GH-Issues]` în consolă
 - Testează din chat orchestrator cu comenzi naturale
+======================================
+
+Ce s-a creat:
+
+Serviciu	Fișier	Ce face
+GitHub	githubService.js	Issues, PRs, CI, repo info via REST API
+Process Manager	processManagerService.js	Spawn/monitor/kill procese background (înlocuiește tmux)
+Coding Agent	codingAgentService.js	Analiză cod, generare fix-uri, PR review — via Gemini API
+GH-Issues Auto-Fix	ghIssuesService.js	Analyze → branch → fix → commit → push → create PR
+Tag-uri noi în orchestrator + glasses gateway: GITHUB_JSON, CODING_JSON, GH_ISSUES_JSON, PROCESS_JSON
+
+35+ endpoint-uri API noi în server.js
+
+Verificare: node --check server.js ✅ + toate modulele se încarcă corect ✅
+
+Pentru a testa live, pornește serverul și configurează GitHub token-ul din Settings.
