@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { useVoiceMode } from '@/hooks/useVoiceMode';
 
 interface Message {
     role: 'user' | 'model';
@@ -29,11 +30,32 @@ export default function OrchestratorPage() {
     const [input, setInput] = useState('');
     const [sending, setSending] = useState(false);
     const [loading, setLoading] = useState(true);
+    const [voiceEnabled, setVoiceEnabled] = useState(false);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
 
+    const {
+        isListening,
+        isSpeaking,
+        isSupported,
+        transcript,
+        interimTranscript,
+        startListening,
+        stopListening,
+        speak,
+        cancelSpeech,
+    } = useVoiceMode('ro-RO');
+
     useEffect(() => { loadHistory(); }, []);
     useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+
+    // Auto-fill input with transcript while listening
+    useEffect(() => {
+        if (isListening) {
+            const current = transcript || interimTranscript;
+            if (current) setInput(current);
+        }
+    }, [transcript, interimTranscript, isListening]);
 
     const loadHistory = async () => {
         try {
@@ -44,9 +66,9 @@ export default function OrchestratorPage() {
         setLoading(false);
     };
 
-    const handleSend = async () => {
-        if (!input.trim() || sending) return;
-        const userMsg = input.trim();
+    const handleSend = async (overrideMessage?: string) => {
+        const userMsg = (overrideMessage || input).trim();
+        if (!userMsg || sending) return;
         setInput('');
         setSending(true);
         setMessages(prev => [...prev, { role: 'user', content: userMsg }]);
@@ -58,7 +80,6 @@ export default function OrchestratorPage() {
                 body: JSON.stringify({ message: userMsg }),
             });
             const data: OrchestratorResponse = await res.json();
-            const agentInfo = agentLabels[data.agent] || agentLabels.general;
 
             // Add agent reply with routing info
             setMessages(prev => [...prev, {
@@ -67,14 +88,16 @@ export default function OrchestratorPage() {
                 agent: data.agent
             }]);
 
+            // Speak the reply if voice mode is on
+            if (voiceEnabled) {
+                speak(data.reply);
+            }
+
             // Booking confirmation
             if (data.booking?.success && data.booking.booking) {
                 const b = data.booking.booking;
-                setMessages(prev => [...prev, {
-                    role: 'model',
-                    agent: 'booking',
-                    content: `✅ BOOKING CONFIRMED\n📋 Guest: ${b.guestName}\n📥 Check-in: ${new Date(b.checkIn).toLocaleDateString('ro-RO')} ${new Date(b.checkIn).toLocaleTimeString('ro-RO', { hour: '2-digit', minute: '2-digit' })}\n📤 Check-out: ${new Date(b.checkOut).toLocaleDateString('ro-RO')} ${new Date(b.checkOut).toLocaleTimeString('ro-RO', { hour: '2-digit', minute: '2-digit' })}`
-                }]);
+                const bookingMsg = `✅ BOOKING CONFIRMED\n📋 Guest: ${b.guestName}\n📥 Check-in: ${new Date(b.checkIn).toLocaleDateString('ro-RO')} ${new Date(b.checkIn).toLocaleTimeString('ro-RO', { hour: '2-digit', minute: '2-digit' })}\n📤 Check-out: ${new Date(b.checkOut).toLocaleDateString('ro-RO')} ${new Date(b.checkOut).toLocaleTimeString('ro-RO', { hour: '2-digit', minute: '2-digit' })}`;
+                setMessages(prev => [...prev, { role: 'model', agent: 'booking', content: bookingMsg }]);
             } else if (data.booking && !data.booking.success) {
                 setMessages(prev => [...prev, { role: 'model', agent: 'booking', content: `❌ BOOKING FAILED\n${data.booking?.error}` }]);
             }
@@ -102,6 +125,36 @@ export default function OrchestratorPage() {
         setMessages([]);
     };
 
+    const handleVoiceToggle = () => {
+        if (!isSupported) return;
+        if (voiceEnabled) {
+            cancelSpeech();
+            if (isListening) stopListening();
+        }
+        setVoiceEnabled(!voiceEnabled);
+    };
+
+    const handleMicPress = () => {
+        if (!voiceEnabled) return;
+
+        if (isListening) {
+            // Stop and send
+            const finalText = stopListening();
+            // Small delay to allow final transcript to settle
+            setTimeout(() => {
+                const textToSend = finalText || transcript || input;
+                if (textToSend.trim()) {
+                    handleSend(textToSend.trim());
+                }
+            }, 300);
+        } else {
+            // Cancel any ongoing speech and start listening
+            cancelSpeech();
+            setInput('');
+            startListening();
+        }
+    };
+
     const isStatusMsg = (c: string) => c.startsWith('✅') || c.startsWith('❌');
 
     return (
@@ -117,11 +170,73 @@ export default function OrchestratorPage() {
                         <p className="text-xs text-violet-500 font-medium flex items-center gap-1">
                             <span className="w-1.5 h-1.5 rounded-full bg-violet-500 animate-pulse" />
                             Orchestrator AI
+                            {voiceEnabled && (
+                                <span className="ml-1 text-pink-500">• Voice On</span>
+                            )}
                         </p>
                     </div>
                 </div>
-                <button onClick={handleClear} className="text-xs text-gray-400 hover:text-red-500 transition-colors px-3 py-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-800">Clear</button>
+                <div className="flex items-center gap-1">
+                    {/* Voice toggle */}
+                    {isSupported && (
+                        <button
+                            onClick={handleVoiceToggle}
+                            className={`relative p-2 rounded-lg transition-all duration-300 ${voiceEnabled
+                                ? 'bg-pink-100 dark:bg-pink-900/40 text-pink-600 dark:text-pink-400 shadow-sm'
+                                : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-zinc-800'
+                                }`}
+                            title={voiceEnabled ? 'Disable voice mode' : 'Enable voice mode'}
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                                <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                                <line x1="12" x2="12" y1="19" y2="22" />
+                            </svg>
+                            {voiceEnabled && (
+                                <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-pink-500 rounded-full animate-pulse" />
+                            )}
+                        </button>
+                    )}
+                    <button onClick={handleClear} className="text-xs text-gray-400 hover:text-red-500 transition-colors px-3 py-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-800">Clear</button>
+                </div>
             </div>
+
+            {/* Listening overlay */}
+            {isListening && (
+                <div className="mx-auto mt-3 flex items-center gap-2 px-4 py-2 rounded-full bg-pink-50 dark:bg-pink-900/30 border border-pink-200 dark:border-pink-800 animate-pulse">
+                    <div className="flex gap-0.5 items-center">
+                        <span className="w-1 h-3 bg-pink-500 rounded-full animate-[voice-bar_0.5s_ease-in-out_infinite]" />
+                        <span className="w-1 h-5 bg-pink-500 rounded-full animate-[voice-bar_0.5s_ease-in-out_infinite_0.1s]" />
+                        <span className="w-1 h-3 bg-pink-500 rounded-full animate-[voice-bar_0.5s_ease-in-out_infinite_0.2s]" />
+                        <span className="w-1 h-6 bg-pink-500 rounded-full animate-[voice-bar_0.5s_ease-in-out_infinite_0.15s]" />
+                        <span className="w-1 h-4 bg-pink-500 rounded-full animate-[voice-bar_0.5s_ease-in-out_infinite_0.25s]" />
+                    </div>
+                    <span className="text-xs font-medium text-pink-600 dark:text-pink-400">
+                        {interimTranscript || transcript || 'Listening...'}
+                    </span>
+                </div>
+            )}
+
+            {/* Speaking indicator */}
+            {isSpeaking && !isListening && (
+                <div className="mx-auto mt-3 flex items-center gap-2 px-4 py-2 rounded-full bg-violet-50 dark:bg-violet-900/30 border border-violet-200 dark:border-violet-800">
+                    <div className="flex gap-0.5 items-center">
+                        <span className="w-1 h-3 bg-violet-500 rounded-full animate-[voice-bar_0.6s_ease-in-out_infinite]" />
+                        <span className="w-1 h-5 bg-violet-500 rounded-full animate-[voice-bar_0.6s_ease-in-out_infinite_0.1s]" />
+                        <span className="w-1 h-4 bg-violet-500 rounded-full animate-[voice-bar_0.6s_ease-in-out_infinite_0.2s]" />
+                    </div>
+                    <span className="text-xs font-medium text-violet-600 dark:text-violet-400">AI speaking...</span>
+                    <button
+                        onClick={cancelSpeech}
+                        className="ml-1 text-xs text-violet-500 hover:text-red-500 transition-colors"
+                        title="Stop speaking"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                            <rect x="6" y="6" width="12" height="12" rx="2" />
+                        </svg>
+                    </button>
+                </div>
+            )}
 
             {/* Messages */}
             <div className="flex-1 overflow-y-auto py-4 space-y-3">
@@ -136,6 +251,16 @@ export default function OrchestratorPage() {
                         <p className="text-sm text-gray-500 dark:text-gray-400 max-w-xs">
                             I automatically route your requests to the right agent — bookings, planning tasks, or general questions.
                         </p>
+                        {isSupported && (
+                            <p className="text-xs text-pink-500 dark:text-pink-400 mt-2 flex items-center gap-1">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                                    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                                    <line x1="12" x2="12" y1="19" y2="22" />
+                                </svg>
+                                Voice mode available — tap the mic in the header!
+                            </p>
+                        )}
                         <div className="mt-4 flex flex-wrap justify-center gap-2">
                             {['Rezervă o cameră pe 5 martie', 'Creează un task pentru mâine', 'Ce poți face?'].map(s => (
                                 <button key={s} onClick={() => { setInput(s); inputRef.current?.focus(); }}
@@ -194,15 +319,54 @@ export default function OrchestratorPage() {
                 <div className="flex items-center gap-2">
                     <input ref={inputRef} type="text" value={input} onChange={e => setInput(e.target.value)}
                         onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-                        placeholder="Ask anything..." disabled={sending}
-                        className="flex-1 px-4 py-2.5 md:py-3 rounded-xl border border-gray-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-sm focus:ring-2 focus:ring-violet-500 focus:border-transparent outline-none transition-all disabled:opacity-50"
+                        placeholder={voiceEnabled && isListening ? 'Listening...' : 'Ask anything...'}
+                        disabled={sending || isListening}
+                        className={`flex-1 px-4 py-2.5 md:py-3 rounded-xl border bg-white dark:bg-zinc-900 text-sm focus:ring-2 focus:ring-violet-500 focus:border-transparent outline-none transition-all disabled:opacity-50 ${isListening ? 'border-pink-400 dark:border-pink-600 ring-2 ring-pink-200 dark:ring-pink-800' : 'border-gray-300 dark:border-zinc-700'
+                            }`}
                     />
-                    <button onClick={handleSend} disabled={!input.trim() || sending}
+
+                    {/* Mic button (only when voice enabled) */}
+                    {voiceEnabled && (
+                        <button
+                            onClick={handleMicPress}
+                            disabled={sending}
+                            className={`p-2.5 md:p-3 rounded-xl transition-all duration-300 flex-shrink-0 ${isListening
+                                ? 'bg-pink-600 hover:bg-pink-700 text-white shadow-lg shadow-pink-500/30 scale-110'
+                                : 'bg-pink-100 dark:bg-pink-900/40 text-pink-600 dark:text-pink-400 hover:bg-pink-200 dark:hover:bg-pink-900/60'
+                                } disabled:opacity-40`}
+                            title={isListening ? 'Stop and send' : 'Start voice input'}
+                        >
+                            {isListening ? (
+                                // Stop / send icon
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="m22 2-7 20-4-9-9-4Z" /><path d="M22 2 11 13" />
+                                </svg>
+                            ) : (
+                                // Mic icon
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                                    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                                    <line x1="12" x2="12" y1="19" y2="22" />
+                                </svg>
+                            )}
+                        </button>
+                    )}
+
+                    {/* Send button */}
+                    <button onClick={() => handleSend()} disabled={!input.trim() || sending}
                         className="p-2.5 md:p-3 rounded-xl bg-violet-600 hover:bg-violet-700 disabled:opacity-40 text-white transition-colors flex-shrink-0">
                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m22 2-7 20-4-9-9-4Z" /><path d="M22 2 11 13" /></svg>
                     </button>
                 </div>
             </div>
+
+            {/* Custom animation styles */}
+            <style jsx>{`
+                @keyframes voice-bar {
+                    0%, 100% { transform: scaleY(0.5); }
+                    50% { transform: scaleY(1.2); }
+                }
+            `}</style>
         </div>
     );
 }
