@@ -10,13 +10,17 @@ const { processGlassesRequest, validateGlassesToken, getRecentMemories, getAllMe
 const { learnObject, approveBatch, dismissBatch } = require('./objectTrackingService');
 const githubService = require('./githubService');
 const cronService = require('./cronService');
+const ugcAgent = require('./ugcAgentService');
+const ugcVideoAgent = require('./ugcVideoAgentService');
+const ugcProductService = require('./ugcProductService');
 const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '200mb' }));
+app.use(express.urlencoded({ limit: '200mb', extended: true }));
 
 const whatsappService = require('./whatsappService');
 
@@ -200,6 +204,76 @@ const CronJobLogSchema = new mongoose.Schema({
   executedAt: { type: Date, default: Date.now }
 });
 const CronJobLog = mongoose.model('CronJobLog', CronJobLogSchema);
+
+const UgcReferenceImageSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  imageData: { type: String, required: true }, // base64
+  mimeType: { type: String, default: 'image/jpeg' },
+  createdAt: { type: Date, default: Date.now }
+});
+const UgcReferenceImage = mongoose.model('UgcReferenceImage', UgcReferenceImageSchema);
+
+const UgcGenerationSchema = new mongoose.Schema({
+  prompt: { type: String, required: true },
+  referenceImageIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'UgcReferenceImage' }],
+  resultFilename: { type: String, default: '' },
+  resultImageData: { type: String, default: '' },
+  description: { type: String, default: '' },
+  aspectRatio: { type: String, default: 'auto' },
+  resolution: { type: String, default: '1K' },
+  status: { type: String, enum: ['pending', 'completed', 'failed'], default: 'pending' },
+  error: { type: String, default: '' },
+  createdAt: { type: Date, default: Date.now }
+});
+const UgcGeneration = mongoose.model('UgcGeneration', UgcGenerationSchema);
+
+const UgcVideoGenerationSchema = new mongoose.Schema({
+  prompt: { type: String, required: true },
+  referenceImageIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'UgcReferenceImage' }],
+  analysis: { type: String, default: '' },
+  videoPrompt: { type: String, default: '' },
+  videoFilename: { type: String, default: '' },
+  description: { type: String, default: '' },
+  aspectRatio: { type: String, default: '16:9' },
+  duration: { type: String, default: '8' },
+  status: { type: String, enum: ['pending', 'analyzing', 'generating', 'completed', 'failed'], default: 'pending' },
+  error: { type: String, default: '' },
+  createdAt: { type: Date, default: Date.now }
+});
+const UgcVideoGeneration = mongoose.model('UgcVideoGeneration', UgcVideoGenerationSchema);
+
+const UgcProductSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  description: { type: String, default: '' },
+  productImages: [{
+    imageData: String,
+    mimeType: { type: String, default: 'image/jpeg' },
+    name: String,
+    uploadedAt: { type: Date, default: Date.now }
+  }],
+  referenceImages: [{
+    imageData: String,
+    mimeType: { type: String, default: 'image/jpeg' },
+    name: String,
+    label: { type: String, default: '' },
+    uploadedAt: { type: Date, default: Date.now }
+  }],
+  systemPrompt: { type: String, default: 'You have been given a brand\'s images. Create a visual guide that can be used to produce more visuals in the style of this brand.' },
+  visualBible: { type: String, default: '' },
+  visualBibleGeneratedAt: { type: Date, default: null },
+  generations: [{
+    prompt: String,
+    resultFilename: String,
+    status: { type: String, enum: ['pending', 'completed', 'failed'], default: 'pending' },
+    error: String,
+    description: String,
+    aspectRatio: { type: String, default: 'auto' },
+    createdAt: { type: Date, default: Date.now }
+  }],
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+});
+const UgcProduct = mongoose.model('UgcProduct', UgcProductSchema);
 
 // API Routes
 app.get('/api/agent/config', async (req, res) => {
@@ -1291,6 +1365,615 @@ app.post('/api/glasses/sync-from-vps', async (req, res) => {
     res.json({ message: `Synced ${synced} memories from VPS`, synced, skipped, total: vpsMemories.length });
   } catch (err) {
     console.error('[Glasses Sync] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===================== UGC AGENT ROUTES =====================
+
+// Serve generated images statically
+const ugcOutputPath = require('path').join(__dirname, 'ugc-output');
+app.use('/api/ugc/images', express.static(ugcOutputPath));
+
+// List reference images
+app.get('/api/ugc/references', async (req, res) => {
+  try {
+    const refs = await UgcReferenceImage.find().sort({ createdAt: -1 });
+    // Return without full base64 for listing (send thumbnail flag)
+    const result = refs.map(r => ({
+      _id: r._id,
+      name: r.name,
+      mimeType: r.mimeType,
+      imageData: r.imageData, // full base64 for display
+      createdAt: r.createdAt
+    }));
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Upload reference image
+app.post('/api/ugc/references', async (req, res) => {
+  try {
+    const { name, imageData, mimeType } = req.body;
+    if (!name || !imageData) return res.status(400).json({ error: 'name and imageData are required' });
+    const ref = await UgcReferenceImage.create({ name, imageData, mimeType: mimeType || 'image/jpeg' });
+    res.status(201).json(ref);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete reference image
+app.delete('/api/ugc/references/:id', async (req, res) => {
+  try {
+    const ref = await UgcReferenceImage.findByIdAndDelete(req.params.id);
+    if (!ref) return res.status(404).json({ error: 'Reference image not found' });
+    res.json({ message: 'Deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Generate UGC image
+app.post('/api/ugc/generate', async (req, res) => {
+  try {
+    const { prompt, referenceImageIds, aspectRatio, resolution } = req.body;
+    if (!prompt) return res.status(400).json({ error: 'prompt is required' });
+    if (!referenceImageIds || !referenceImageIds.length) {
+      return res.status(400).json({ error: 'At least one reference image is required' });
+    }
+
+    // Create pending generation record
+    const gen = await UgcGeneration.create({
+      prompt,
+      referenceImageIds,
+      aspectRatio: aspectRatio || 'auto',
+      resolution: resolution || '1K',
+      status: 'pending'
+    });
+
+    // Fetch reference images
+    const refs = await UgcReferenceImage.find({ _id: { $in: referenceImageIds } });
+    const base64Images = refs.map(r => ({ data: r.imageData, mimeType: r.mimeType }));
+
+    // Generate (async but we wait for it)
+    try {
+      const result = await ugcAgent.generateImage(prompt, base64Images, {
+        aspectRatio: aspectRatio || 'auto',
+        resolution: resolution || '1K'
+      });
+
+      gen.resultFilename = result.filename;
+      gen.description = result.description;
+      gen.status = 'completed';
+      await gen.save();
+
+      res.json(gen);
+    } catch (genErr) {
+      gen.status = 'failed';
+      gen.error = genErr.message;
+      await gen.save();
+      res.status(500).json({ error: genErr.message, generation: gen });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// List generations (auto-migrates old base64 records to files)
+app.get('/api/ugc/generations', async (req, res) => {
+  try {
+    const gens = await UgcGeneration.find().sort({ createdAt: -1 }).limit(50);
+
+    // Auto-migrate old base64 records to file-based
+    for (const gen of gens) {
+      if (gen.resultImageData && !gen.resultFilename) {
+        try {
+          const filename = `ugc_${gen._id}.png`;
+          const filePath = require('path').join(ugcOutputPath, filename);
+          const buffer = Buffer.from(gen.resultImageData, 'base64');
+          require('fs').writeFileSync(filePath, buffer);
+          gen.resultFilename = filename;
+          gen.resultImageData = '';
+          await gen.save();
+          console.log(`[UGC] Migrated generation ${gen._id} to file: ${filename}`);
+        } catch (migErr) {
+          console.error(`[UGC] Migration failed for ${gen._id}:`, migErr.message);
+        }
+      }
+    }
+
+    res.json(gens);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete generation
+app.delete('/api/ugc/generations/:id', async (req, res) => {
+  try {
+    const gen = await UgcGeneration.findByIdAndDelete(req.params.id);
+    if (!gen) return res.status(404).json({ error: 'Generation not found' });
+    res.json({ message: 'Deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===================== UGC VIDEO AGENT ROUTES =====================
+
+// Serve generated videos statically
+app.use('/api/ugc-video/files', express.static(require('path').join(__dirname, 'ugc-output')));
+
+// Analyze reference images
+app.post('/api/ugc-video/analyze', async (req, res) => {
+  try {
+    const { referenceImageIds } = req.body;
+    if (!referenceImageIds || !referenceImageIds.length) {
+      return res.status(400).json({ error: 'At least one reference image is required' });
+    }
+    const refs = await UgcReferenceImage.find({ _id: { $in: referenceImageIds } });
+    if (refs.length === 0) {
+      return res.status(404).json({ error: 'No reference images found' });
+    }
+    const base64Images = refs.map(r => ({ data: r.imageData, mimeType: r.mimeType }));
+    const analysis = await ugcVideoAgent.analyzeReferenceImages(base64Images);
+    res.json({ analysis });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Generate UGC video (async — returns immediately, runs in background)
+app.post('/api/ugc-video/generate', async (req, res) => {
+  try {
+    const { prompt, referenceImageIds, aspectRatio, duration } = req.body;
+    if (!prompt) return res.status(400).json({ error: 'prompt is required' });
+    if (!referenceImageIds || !referenceImageIds.length) {
+      return res.status(400).json({ error: 'At least one reference image is required' });
+    }
+
+    // Create pending generation record
+    const gen = await UgcVideoGeneration.create({
+      prompt,
+      referenceImageIds,
+      aspectRatio: aspectRatio || '16:9',
+      duration: duration || '8',
+      status: 'pending'
+    });
+
+    // Return immediately
+    res.status(202).json({ _id: gen._id, status: 'pending', message: 'Video generation started' });
+
+    // Run generation in background
+    (async () => {
+      try {
+        // Fetch reference images
+        const refs = await UgcReferenceImage.find({ _id: { $in: referenceImageIds } });
+        const base64Images = refs.map(r => ({ data: r.imageData, mimeType: r.mimeType }));
+
+        // Update status to analyzing
+        gen.status = 'analyzing';
+        await gen.save();
+
+        const result = await ugcVideoAgent.generateUGCVideo(
+          prompt,
+          base64Images,
+          { aspectRatio: aspectRatio || '16:9', duration: duration || '8' }
+        );
+
+        gen.analysis = result.analysis;
+        gen.videoPrompt = result.videoPrompt;
+        gen.videoFilename = result.videoFilename;
+        gen.status = 'completed';
+        await gen.save();
+        console.log(`[UGC Video Route] Generation ${gen._id} completed: ${result.videoFilename}`);
+      } catch (genErr) {
+        console.error(`[UGC Video Route] Generation ${gen._id} failed:`, genErr.message);
+        gen.status = 'failed';
+        gen.error = genErr.message;
+        await gen.save();
+      }
+    })();
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// List video generations
+app.get('/api/ugc-video/generations', async (req, res) => {
+  try {
+    const gens = await UgcVideoGeneration.find().sort({ createdAt: -1 }).limit(50);
+    res.json(gens);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get single generation status
+app.get('/api/ugc-video/generations/:id', async (req, res) => {
+  try {
+    const gen = await UgcVideoGeneration.findById(req.params.id);
+    if (!gen) return res.status(404).json({ error: 'Generation not found' });
+    res.json(gen);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete video generation
+app.delete('/api/ugc-video/generations/:id', async (req, res) => {
+  try {
+    const gen = await UgcVideoGeneration.findByIdAndDelete(req.params.id);
+    if (!gen) return res.status(404).json({ error: 'Generation not found' });
+    // Try to delete the video file too
+    if (gen.videoFilename) {
+      const filePath = require('path').join(__dirname, 'ugc-output', gen.videoFilename);
+      try { require('fs').unlinkSync(filePath); } catch { }
+    }
+    res.json({ message: 'Deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===================== UGC PRODUCT ROUTES =====================
+
+// List all products (without full image data for performance)
+app.get('/api/ugc-product', async (req, res) => {
+  try {
+    const products = await UgcProduct.find().sort({ updatedAt: -1 }).select('-productImages.imageData -referenceImages.imageData -generations.resultImageData');
+    res.json(products);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Create product
+app.post('/api/ugc-product', async (req, res) => {
+  try {
+    const { name, description } = req.body;
+    if (!name) return res.status(400).json({ error: 'name is required' });
+    const product = await UgcProduct.create({ name, description });
+    res.status(201).json(product);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get single product (full data)
+app.get('/api/ugc-product/:id', async (req, res) => {
+  try {
+    const product = await UgcProduct.findById(req.params.id);
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+    res.json(product);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update product details
+app.put('/api/ugc-product/:id', async (req, res) => {
+  try {
+    const { name, description } = req.body;
+    const product = await UgcProduct.findById(req.params.id);
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+    if (name !== undefined) product.name = name;
+    if (description !== undefined) product.description = description;
+    product.updatedAt = Date.now();
+    await product.save();
+    res.json(product);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete product
+app.delete('/api/ugc-product/:id', async (req, res) => {
+  try {
+    const product = await UgcProduct.findByIdAndDelete(req.params.id);
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+    // Clean up generated files
+    for (const gen of product.generations || []) {
+      if (gen.resultFilename) {
+        try { fs.unlinkSync(path.join(__dirname, 'ugc-output', gen.resultFilename)); } catch { }
+      }
+    }
+    res.json({ message: 'Product deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Upload product images
+app.post('/api/ugc-product/:id/product-images', async (req, res) => {
+  try {
+    const { images } = req.body; // [{ imageData, mimeType, name }]
+    if (!images || !images.length) return res.status(400).json({ error: 'images array is required' });
+    const product = await UgcProduct.findById(req.params.id);
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+    for (const img of images) {
+      product.productImages.push({
+        imageData: img.imageData,
+        mimeType: img.mimeType || 'image/jpeg',
+        name: img.name || `product_${Date.now()}`,
+      });
+    }
+    product.updatedAt = Date.now();
+    await product.save();
+    res.json({ count: images.length, totalProductImages: product.productImages.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete product image
+app.delete('/api/ugc-product/:id/product-images/:imgIdx', async (req, res) => {
+  try {
+    const product = await UgcProduct.findById(req.params.id);
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+    const idx = parseInt(req.params.imgIdx);
+    if (idx < 0 || idx >= product.productImages.length) return res.status(404).json({ error: 'Image index out of range' });
+    product.productImages.splice(idx, 1);
+    product.updatedAt = Date.now();
+    await product.save();
+    res.json({ message: 'Product image deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Upload reference images
+app.post('/api/ugc-product/:id/reference-images', async (req, res) => {
+  try {
+    const { images } = req.body; // [{ imageData, mimeType, name, label }]
+    if (!images || !images.length) return res.status(400).json({ error: 'images array is required' });
+    const product = await UgcProduct.findById(req.params.id);
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+    for (const img of images) {
+      product.referenceImages.push({
+        imageData: img.imageData,
+        mimeType: img.mimeType || 'image/jpeg',
+        name: img.name || `ref_${Date.now()}`,
+        label: img.label || `Image ${product.referenceImages.length + 1}`,
+      });
+    }
+    product.updatedAt = Date.now();
+    await product.save();
+    res.json({ count: images.length, totalReferenceImages: product.referenceImages.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete reference image
+app.delete('/api/ugc-product/:id/reference-images/:imgIdx', async (req, res) => {
+  try {
+    const product = await UgcProduct.findById(req.params.id);
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+    const idx = parseInt(req.params.imgIdx);
+    if (idx < 0 || idx >= product.referenceImages.length) return res.status(404).json({ error: 'Image index out of range' });
+    product.referenceImages.splice(idx, 1);
+    product.updatedAt = Date.now();
+    await product.save();
+    res.json({ message: 'Reference image deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update system prompt
+app.put('/api/ugc-product/:id/system-prompt', async (req, res) => {
+  try {
+    const { systemPrompt } = req.body;
+    const product = await UgcProduct.findById(req.params.id);
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+    product.systemPrompt = systemPrompt || ugcProductService.DEFAULT_VISUAL_BIBLE_PROMPT;
+    product.updatedAt = Date.now();
+    await product.save();
+    res.json({ systemPrompt: product.systemPrompt });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Generate Visual Bible
+app.post('/api/ugc-product/:id/visual-bible', async (req, res) => {
+  try {
+    const product = await UgcProduct.findById(req.params.id);
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+    if (product.referenceImages.length === 0) {
+      return res.status(400).json({ error: 'Upload reference images before generating a Visual Bible' });
+    }
+    const refImages = product.referenceImages.map(r => ({ data: r.imageData, mimeType: r.mimeType }));
+    const visualBible = await ugcProductService.generateVisualBible(product.systemPrompt, refImages);
+    product.visualBible = visualBible;
+    product.visualBibleGeneratedAt = Date.now();
+    product.updatedAt = Date.now();
+    await product.save();
+    res.json({ visualBible, generatedAt: product.visualBibleGeneratedAt });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Generate UGC content for product
+app.post('/api/ugc-product/:id/generate', async (req, res) => {
+  try {
+    const { prompt, aspectRatio } = req.body;
+    if (!prompt) return res.status(400).json({ error: 'prompt is required' });
+    const product = await UgcProduct.findById(req.params.id);
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+    if (product.productImages.length === 0) {
+      return res.status(400).json({ error: 'Upload product images before generating UGC content' });
+    }
+
+    // Add pending generation
+    const genEntry = {
+      prompt,
+      status: 'pending',
+      aspectRatio: aspectRatio || 'auto',
+    };
+    product.generations.push(genEntry);
+    await product.save();
+    const genIdx = product.generations.length - 1;
+    const genId = product.generations[genIdx]._id;
+
+    // Return immediately with pending status
+    res.status(202).json({ _id: genId, index: genIdx, status: 'pending', message: 'Generation started' });
+
+    // Run in background
+    (async () => {
+      try {
+        const prodImages = product.productImages.map(p => ({ data: p.imageData, mimeType: p.mimeType }));
+        const result = await ugcProductService.generateProductUGC(
+          prodImages,
+          product.visualBible,
+          prompt,
+          { aspectRatio: aspectRatio || 'auto' }
+        );
+
+        // Update the generation entry
+        const updatedProduct = await UgcProduct.findById(req.params.id);
+        const gen = updatedProduct.generations.id(genId);
+        if (gen) {
+          gen.resultFilename = result.filename;
+          gen.description = result.description;
+          gen.status = 'completed';
+          updatedProduct.updatedAt = Date.now();
+          await updatedProduct.save();
+        }
+        console.log(`[UGC Product] Generation ${genId} completed: ${result.filename}`);
+      } catch (genErr) {
+        console.error(`[UGC Product] Generation ${genId} failed:`, genErr.message);
+        try {
+          const updatedProduct = await UgcProduct.findById(req.params.id);
+          const gen = updatedProduct.generations.id(genId);
+          if (gen) {
+            gen.status = 'failed';
+            gen.error = genErr.message;
+            await updatedProduct.save();
+          }
+        } catch { }
+      }
+    })();
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Generate UGC Content Collection (Auto 10 variations)
+app.post('/api/ugc-product/:id/generate-collection', async (req, res) => {
+  try {
+    const { count = 10, aspectRatio = 'auto' } = req.body;
+    const product = await UgcProduct.findById(req.params.id);
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+    if (product.productImages.length === 0) {
+      return res.status(400).json({ error: 'Upload product images before generating UGC content' });
+    }
+    if (!product.visualBible) {
+      return res.status(400).json({ error: 'Generate a Visual Bible first' });
+    }
+
+    // Generate 10 text prompts
+    let scenePrompts;
+    try {
+      scenePrompts = await ugcProductService.generateScenePrompts(product.visualBible, count);
+    } catch (e) {
+      return res.status(500).json({ error: 'Failed to generate scene prompts: ' + e.message });
+    }
+
+    // Add pending generations
+    const addedGenerations = [];
+    for (const prompt of scenePrompts) {
+      product.generations.push({
+        prompt,
+        status: 'pending',
+        aspectRatio,
+      });
+      addedGenerations.push(product.generations[product.generations.length - 1]);
+    }
+    await product.save();
+
+    // Return immediately with pending statuses
+    res.status(202).json({
+      message: `Started generating ${scenePrompts.length} images`,
+      count: scenePrompts.length,
+      generations: addedGenerations
+    });
+
+    // Run in background (processing sequentially to avoid rate limits, or batch them)
+    (async () => {
+      const prodImages = product.productImages.map(p => ({ data: p.imageData, mimeType: p.mimeType }));
+      for (const genInfo of addedGenerations) {
+        try {
+          const result = await ugcProductService.generateProductUGC(
+            prodImages,
+            product.visualBible,
+            genInfo.prompt,
+            { aspectRatio: aspectRatio }
+          );
+
+          // Update the generation entry
+          const updatedProduct = await UgcProduct.findById(req.params.id);
+          const gen = updatedProduct.generations.id(genInfo._id);
+          if (gen) {
+            gen.resultFilename = result.filename;
+            gen.description = result.description;
+            gen.status = 'completed';
+            updatedProduct.updatedAt = Date.now();
+            await updatedProduct.save();
+          }
+          console.log(`[UGC Product] Generation ${genInfo._id} completed`);
+        } catch (genErr) {
+          console.error(`[UGC Product] Generation ${genInfo._id} failed:`, genErr.message);
+          try {
+            const updatedProduct = await UgcProduct.findById(req.params.id);
+            const gen = updatedProduct.generations.id(genInfo._id);
+            if (gen) {
+              gen.status = 'failed';
+              gen.error = genErr.message;
+              await updatedProduct.save();
+            }
+          } catch { }
+        }
+      }
+    })();
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get generation status
+app.get('/api/ugc-product/:id/generations/:genId', async (req, res) => {
+  try {
+    const product = await UgcProduct.findById(req.params.id);
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+    const gen = product.generations.id(req.params.genId);
+    if (!gen) return res.status(404).json({ error: 'Generation not found' });
+    res.json(gen);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete generation
+app.delete('/api/ugc-product/:id/generations/:genId', async (req, res) => {
+  try {
+    const product = await UgcProduct.findById(req.params.id);
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+    const gen = product.generations.id(req.params.genId);
+    if (!gen) return res.status(404).json({ error: 'Generation not found' });
+    if (gen.resultFilename) {
+      try { fs.unlinkSync(path.join(__dirname, 'ugc-output', gen.resultFilename)); } catch { }
+    }
+    product.generations.pull(req.params.genId);
+    product.updatedAt = Date.now();
+    await product.save();
+    res.json({ message: 'Generation deleted' });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
