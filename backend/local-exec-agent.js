@@ -65,7 +65,7 @@ function runShellCommand(command, cwd) {
 
         execFile(shell, [shellFlag, command], {
             cwd: workDir,
-            timeout: 5 * 60 * 1000,
+            timeout: 20 * 60 * 1000, // 20 min for long claude CLI sessions
             maxBuffer: 1024 * 1024 * 5
         }, (error, stdout, stderr) => {
             const output = [stdout, stderr].filter(Boolean).join('\n').trim();
