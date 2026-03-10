@@ -1,4 +1,4 @@
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const Anthropic = require('@anthropic-ai/sdk');
 const mongoose = require('mongoose');
 
 const MAX_STEPS = 25;
@@ -38,17 +38,13 @@ RULES:
 - Keep changes minimal and focused on the task
 - Use the project's existing coding style and conventions`;
 
-// ─── Helper: Get Gemini Model ────────────────────────────────────────────────
+// ─── Helper: Get Anthropic Client ───────────────────────────────────────────
 
-async function getModel() {
+async function getClient() {
     const Setting = mongoose.model('Setting');
-    const setting = await Setting.findOne({ key: 'gemini_api_key' });
-    if (!setting?.value) throw new Error('Gemini API key not configured.');
-    const genAI = new GoogleGenerativeAI(setting.value);
-    return genAI.getGenerativeModel({
-        model: 'gemini-2.5-flash',
-        systemInstruction: SYSTEM_PROMPT
-    });
+    const setting = await Setting.findOne({ key: 'anthropic_api_key' });
+    if (!setting?.value) throw new Error('Anthropic API key not configured. Set it at /api/settings/anthropic');
+    return new Anthropic({ apiKey: setting.value });
 }
 
 // ─── Helper: Execute tool on local PC via queue ──────────────────────────────
@@ -85,7 +81,7 @@ async function executeOnLocalPC(toolCall) {
     return { output: 'Timeout: command did not complete in 3 minutes', exitCode: 1, status: 'error' };
 }
 
-// ─── Helper: Extract tool call from Gemini response ──────────────────────────
+// ─── Helper: Extract tool call from response ─────────────────────────────────
 
 function extractToolCall(text) {
     const match = text.match(/<TOOL>([\s\S]*?)<\/TOOL>/);
@@ -152,13 +148,13 @@ async function updateProjectMemory(projectPath, session) {
 
 async function runCodingLoop(task, projectPath, sessionId) {
     const CodingSession = mongoose.model('CodingSession');
-    const model = await getModel();
+    const client = await getClient();
 
     console.log(`[CodingLoop] Starting session ${sessionId}: "${task}" in ${projectPath}`);
 
     // Build initial context
     const memoryText = await loadProjectMemory(projectPath);
-    const history = [];
+    const messages = [];
 
     // Initial user message with task + memory
     const initialMessage = [
@@ -168,15 +164,24 @@ async function runCodingLoop(task, projectPath, sessionId) {
         `\nStart by exploring the project structure, then implement the task.`
     ].join('\n');
 
-    const chat = model.startChat({ history });
+    messages.push({ role: 'user', content: initialMessage });
+
     let stepNum = 0;
     const filesChanged = new Set();
 
     try {
-        let response = await chat.sendMessage(initialMessage);
-        let responseText = response.response.text();
+        let response = await client.messages.create({
+            model: 'claude-opus-4-6',
+            max_tokens: 16000,
+            system: SYSTEM_PROMPT,
+            messages
+        });
+        let responseText = response.content[0].text;
 
         while (stepNum < MAX_STEPS) {
+            // Add assistant response to history
+            messages.push({ role: 'assistant', content: responseText });
+
             // Save think step
             const thinkText = responseText.replace(/<TOOL>[\s\S]*?<\/TOOL>/g, '').trim();
             if (thinkText) {
@@ -231,10 +236,17 @@ async function runCodingLoop(task, projectPath, sessionId) {
 
             stepNum++;
 
-            // Feed result back to Gemini
+            // Feed result back to Claude
             const observation = `Tool "${toolCall.tool}" result (exit ${result.exitCode}):\n${resultText}`;
-            response = await chat.sendMessage(observation);
-            responseText = response.response.text();
+            messages.push({ role: 'user', content: observation });
+
+            response = await client.messages.create({
+                model: 'claude-opus-4-6',
+                max_tokens: 16000,
+                system: SYSTEM_PROMPT,
+                messages
+            });
+            responseText = response.content[0].text;
         }
 
         // Max steps reached

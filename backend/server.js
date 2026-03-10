@@ -417,6 +417,35 @@ app.post('/api/settings/gemini', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ─── Anthropic API Key Settings ─────────────────────────────────────────────
+app.get('/api/settings/anthropic', async (req, res) => {
+  try {
+    const setting = await Setting.findOne({ key: 'anthropic_api_key' });
+    if (!setting || !setting.value) return res.json({ apiKey: null });
+    const val = setting.value;
+    const masked = val.length > 10 ? '...'.concat(val.slice(-10)) : val;
+    res.json({ apiKey: masked });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/settings/anthropic', async (req, res) => {
+  try {
+    const { apiKey } = req.body;
+    if (!apiKey) return res.status(400).json({ error: 'API Key is required' });
+    await Setting.findOneAndUpdate(
+      { key: 'anthropic_api_key' },
+      { value: apiKey, updatedAt: Date.now() },
+      { upsert: true, new: true }
+    );
+    res.status(200).json({ message: 'Anthropic API Key updated successfully' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/status', (req, res) => {
   res.json({ status: 'Backend is running!', db: mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected' });
 });
