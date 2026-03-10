@@ -73,6 +73,16 @@ Pentru LOCAL EXEC (execuție comandă pe PC-ul local al utilizatorului — comen
 <LOCAL_EXEC_JSON>{"command":"git pull && npm install","label":"Update repo"}</LOCAL_EXEC_JSON>
 <LOCAL_EXEC_JSON>{"command":"code /path/to/file.js","label":"Open file in VS Code"}</LOCAL_EXEC_JSON>
 
+Pentru SCREENSHOT (captură ecran de pe PC-ul local):
+<SCREENSHOT_JSON>{"area":"full"}</SCREENSHOT_JSON>
+<SCREENSHOT_JSON>{"area":"window","windowTitle":"Chrome"}</SCREENSHOT_JSON>
+- Folosește când utilizatorul cere screenshot, captură ecran, "ce am pe ecran", "arată-mi ecranul"
+
+Pentru CLIPBOARD (citire/scriere clipboard de pe PC-ul local):
+<CLIPBOARD_JSON>{"action":"read"}</CLIPBOARD_JSON>
+<CLIPBOARD_JSON>{"action":"write","text":"text de copiat"}</CLIPBOARD_JSON>
+- Folosește când utilizatorul cere "ce am copiat", "ce e în clipboard", "copiază textul X"
+
 Pentru CRON JOBS (programare acțiuni recurente):
 <CRON_JSON>{"action":"create","name":"Morning reminder","cron":"0 8 * * *","type":"notification","payload":{"message":"Time to start the day!"}}</CRON_JSON>
 <CRON_JSON>{"action":"create","name":"Daily task","cron":"0 9 * * 1-5","type":"task","payload":{"title":"Check emails","priority":"medium"}}</CRON_JSON>
@@ -140,10 +150,14 @@ function cleanAllTags(text) {
         .replace(/<CRON_JSON>[\s\S]*?<\/CRON_JSON>/g, '')
         .replace(/<WEB_AGENT_JSON>[\s\S]*?<\/WEB_AGENT_JSON>/g, '')
         .replace(/<LOCAL_EXEC_JSON>[\s\S]*?<\/LOCAL_EXEC_JSON>/g, '')
+        .replace(/<SCREENSHOT_JSON>[\s\S]*?<\/SCREENSHOT_JSON>/g, '')
+        .replace(/<CLIPBOARD_JSON>[\s\S]*?<\/CLIPBOARD_JSON>/g, '')
         .trim();
 }
 
-function detectIntent(text, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData, localExecData) {
+function detectIntent(text, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData, localExecData, screenshotData, clipboardData) {
+    if (screenshotData) return 'screenshot';
+    if (clipboardData) return 'clipboard';
     if (localExecData) return 'local-exec';
     if (webAgentData) return 'web-agent';
     if (escalateData) return 'escalate';
@@ -155,6 +169,8 @@ function detectIntent(text, bookingData, taskData, escalateData, githubData, cro
     if (bookingData) return 'booking';
     if (taskData) return 'planner';
     const lower = text.toLowerCase();
+    if (/screenshot|captură.*ecran|captur.*ecran|print.*screen|ce am pe ecran|arată.*ecranul/.test(lower)) return 'screenshot';
+    if (/clipboard|copiat|ce am copiat|paste|lipit/.test(lower)) return 'clipboard';
     if (/mergi pe|deschide site|navigheaz|comand[aă].*pe|caut[aă].*pe.*web|completea.*formular|browser|web.*agent|automat.*web|wolt|uber.*eats|booking\.com|ryanair|emag|amazon/.test(lower)) return 'web-agent';
     if (/execut[aă].*local|rulea.*pe pc|comand[aă].*local|local.*exec|pe pc|pe local|pe computer|deschide.*pe.*pc|rulează.*local/.test(lower)) return 'local-exec';
     if (/(?<!\bvs\s)\bcod(?!e[\s.])|fix\b|bug|refactor|review.*pr|analize.*cod|implementea|debug/.test(lower)) return 'coding';
@@ -205,7 +221,9 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
     const processData = extractJSON(responseText, 'PROCESS_JSON');
     const webAgentData = extractJSON(responseText, 'WEB_AGENT_JSON');
     const localExecData = extractJSON(responseText, 'LOCAL_EXEC_JSON');
-    const intent = detectIntent(userMessage, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData, localExecData);
+    const screenshotData = extractJSON(responseText, 'SCREENSHOT_JSON');
+    const clipboardData = extractJSON(responseText, 'CLIPBOARD_JSON');
+    const intent = detectIntent(userMessage, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData, localExecData, screenshotData, clipboardData);
 
     // Clean response
     responseText = cleanAllTags(responseText);
@@ -379,6 +397,45 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
             }
         } catch (err) {
             console.error('[Orchestrator] LocalExec fallback error:', err.message);
+        }
+    }
+
+    // Process Screenshot MCP action — queues MCP command for local PC agent
+    if (screenshotData || (intent === 'screenshot' && !localExecResult)) {
+        try {
+            const LocalExecCommand = mongoose.model('LocalExecCommand');
+            const doc = await LocalExecCommand.create({
+                command: 'take_screenshot',
+                label: 'Screenshot',
+                execType: 'mcp',
+                mcpServer: 'screenshot',
+                mcpArgs: screenshotData || { area: 'full' }
+            });
+            localExecResult = { success: true, id: doc._id, command: 'take_screenshot', label: 'Screenshot', status: 'pending', type: 'mcp' };
+            console.log('[Orchestrator] MCP Screenshot queued → id', doc._id);
+        } catch (err) {
+            console.error('[Orchestrator] Screenshot error:', err.message);
+            localExecResult = { success: false, error: err.message };
+        }
+    }
+
+    // Process Clipboard MCP action — queues MCP command for local PC agent
+    if (clipboardData || (intent === 'clipboard' && !localExecResult)) {
+        try {
+            const LocalExecCommand = mongoose.model('LocalExecCommand');
+            const args = clipboardData || { action: 'read' };
+            const doc = await LocalExecCommand.create({
+                command: args.action === 'write' ? 'write_clipboard' : 'read_clipboard',
+                label: args.action === 'write' ? 'Write Clipboard' : 'Read Clipboard',
+                execType: 'mcp',
+                mcpServer: 'clipboard',
+                mcpArgs: args
+            });
+            localExecResult = { success: true, id: doc._id, command: doc.command, label: doc.label, status: 'pending', type: 'mcp' };
+            console.log('[Orchestrator] MCP Clipboard queued → id', doc._id);
+        } catch (err) {
+            console.error('[Orchestrator] Clipboard error:', err.message);
+            localExecResult = { success: false, error: err.message };
         }
     }
 

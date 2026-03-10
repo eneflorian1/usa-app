@@ -7,6 +7,9 @@ interface ExecCommand {
     command: string;
     label: string;
     cwd: string;
+    execType?: 'shell' | 'mcp';
+    mcpServer?: string;
+    mcpArgs?: Record<string, unknown>;
     status: 'pending' | 'running' | 'done' | 'error';
     output: string;
     exitCode: number | null;
@@ -145,6 +148,11 @@ export default function TerminalPage() {
                                         <span className={`inline-flex items-center px-2 py-1 rounded-lg text-xs font-medium ${st.color}`}>
                                             {st.icon} {st.label}
                                         </span>
+                                        {cmd.execType === 'mcp' && (
+                                            <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400">
+                                                MCP:{cmd.mcpServer}
+                                            </span>
+                                        )}
                                         <code className="text-sm font-mono text-gray-800 dark:text-gray-200 truncate">
                                             {cmd.command}
                                         </code>
@@ -165,9 +173,21 @@ export default function TerminalPage() {
                                         {cmd.cwd && (
                                             <div className="px-4 pt-1 text-xs text-gray-500 font-mono">cwd: {cmd.cwd}</div>
                                         )}
-                                        <pre className="p-4 text-sm font-mono text-gray-300 bg-gray-950 dark:bg-black overflow-x-auto whitespace-pre-wrap max-h-96">
-                                            {cmd.output || '(no output)'}
-                                        </pre>
+                                        {cmd.output && cmd.output.includes('[IMAGE:') ? (
+                                            <div className="p-4 bg-gray-950 dark:bg-black">
+                                                {cmd.output.split('\n').map((line, i) => {
+                                                    const imgMatch = line.match(/\[IMAGE:(.*?)\](.*)/);
+                                                    if (imgMatch) {
+                                                        return <img key={i} src={`data:${imgMatch[1]};base64,${imgMatch[2]}`} alt="Screenshot" className="max-w-full rounded-lg" />;
+                                                    }
+                                                    return line ? <pre key={i} className="text-sm font-mono text-gray-300 whitespace-pre-wrap">{line}</pre> : null;
+                                                })}
+                                            </div>
+                                        ) : (
+                                            <pre className="p-4 text-sm font-mono text-gray-300 bg-gray-950 dark:bg-black overflow-x-auto whitespace-pre-wrap max-h-96">
+                                                {cmd.output || '(no output)'}
+                                            </pre>
+                                        )}
                                     </div>
                                 )}
                             </div>
