@@ -1,49 +1,26 @@
 #!/usr/bin/env node
 /**
- * Local Exec Agent + MCP Client
- * Rulează pe PC-ul local și execută comenzile trimise din chat-ul de pe VPS.
- * Suportă atât comenzi shell cât și MCP tools (screenshot, clipboard).
+ * Local Exec Agent — runs on user's PC
+ * Executes shell commands + native MCP tools (screenshot, clipboard, filesystem, sysinfo)
  *
- * Pornire:
- *   node local-exec-agent.js
+ * Usage:  node local-exec-agent.js
  *
- * Variabile de mediu (sau editează direct mai jos):
- *   VPS_URL   - URL-ul VPS-ului (ex: http://155.117.45.192:5000)
- *   POLL_MS   - interval polling în ms (default: 3000)
- *   EXEC_CWD  - director de lucru default pentru comenzi (default: $HOME)
+ * Env vars:
+ *   VPS_URL   - VPS URL (default: http://155.117.45.192:5000)
+ *   POLL_MS   - polling interval ms (default: 3000)
+ *   EXEC_CWD  - default working directory (default: $HOME)
  */
 
-const { execFile, spawn } = require('child_process');
+const { execFile } = require('child_process');
 const https = require('https');
 const http = require('http');
 const os = require('os');
+const fs = require('fs');
 const path = require('path');
 
 const VPS_URL = process.env.VPS_URL || 'http://155.117.45.192:5000';
 const POLL_MS = parseInt(process.env.POLL_MS || '3000', 10);
 const DEFAULT_CWD = process.env.EXEC_CWD || os.homedir();
-
-// ─── MCP Server Registry ────────────────────────────────────────────────────
-
-const MCP_SERVERS = {
-    screenshot: {
-        command: 'npx',
-        args: ['-y', 'screen-capture-mcp'],
-        client: null,
-        transport: null,
-        ready: false
-    },
-    clipboard: {
-        command: 'npx',
-        args: ['-y', '@nicholasoxford/clipboard-mcp-server'],
-        client: null,
-        transport: null,
-        ready: false
-    }
-};
-
-let mcpSdkAvailable = false;
-let Client, StdioClientTransport;
 
 // ─── HTTP helpers ─────────────────────────────────────────────────────────────
 
@@ -61,7 +38,7 @@ function request(method, url, body) {
                 'Content-Type': 'application/json',
                 ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {})
             },
-            timeout: 10000
+            timeout: 15000
         };
         const req = lib.request(options, (res) => {
             let raw = '';
@@ -80,13 +57,13 @@ function request(method, url, body) {
 
 // ─── Shell Command execution ─────────────────────────────────────────────────
 
-function runCommand(command, cwd) {
+function runShellCommand(command, cwd) {
     return new Promise((resolve) => {
         const shell = process.platform === 'win32' ? 'cmd' : 'bash';
         const shellFlag = process.platform === 'win32' ? '/c' : '-c';
         const workDir = cwd && cwd.trim() ? cwd.trim() : DEFAULT_CWD;
 
-        const child = execFile(shell, [shellFlag, command], {
+        execFile(shell, [shellFlag, command], {
             cwd: workDir,
             timeout: 5 * 60 * 1000,
             maxBuffer: 1024 * 1024 * 5
@@ -97,116 +74,344 @@ function runCommand(command, cwd) {
                 exitCode: error ? (error.code ?? 1) : 0
             });
         });
+    });
+}
 
-        child.on('error', (err) => {
-            resolve({ output: err.message, exitCode: 1 });
+// ─── Native MCP Tools ────────────────────────────────────────────────────────
+// Built-in tools that don't need external MCP servers
+
+const mcpTools = {
+
+    // ── Screenshot ──────────────────────────────────────────────────────────
+    screenshot: {
+        async take_screenshot(args) {
+            const tmpFile = path.join(os.tmpdir(), `screenshot_${Date.now()}.png`);
+            try {
+                if (process.platform === 'win32') {
+                    // PowerShell screenshot on Windows
+                    const ps = `
+                        Add-Type -AssemblyName System.Windows.Forms
+                        Add-Type -AssemblyName System.Drawing
+                        $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+                        $bitmap = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
+                        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+                        $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+                        $bitmap.Save('${tmpFile.replace(/\\/g, '\\\\')}')
+                        $graphics.Dispose()
+                        $bitmap.Dispose()
+                    `.trim();
+                    await runPowerShell(ps);
+                } else {
+                    // Linux/Mac
+                    await runShellCommand(`screencapture -x "${tmpFile}" 2>/dev/null || import -window root "${tmpFile}"`, '');
+                }
+
+                if (fs.existsSync(tmpFile)) {
+                    const data = fs.readFileSync(tmpFile).toString('base64');
+                    fs.unlinkSync(tmpFile);
+                    return { output: `[IMAGE:image/png]${data}`, exitCode: 0 };
+                }
+                return { output: 'Screenshot failed: file not created', exitCode: 1 };
+            } catch (err) {
+                if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
+                return { output: `Screenshot error: ${err.message}`, exitCode: 1 };
+            }
+        }
+    },
+
+    // ── Clipboard ───────────────────────────────────────────────────────────
+    clipboard: {
+        async read_clipboard() {
+            try {
+                if (process.platform === 'win32') {
+                    const result = await runPowerShell('Get-Clipboard');
+                    return { output: result || '(clipboard empty)', exitCode: 0 };
+                } else {
+                    const { output } = await runShellCommand('pbpaste 2>/dev/null || xclip -selection clipboard -o 2>/dev/null', '');
+                    return { output: output || '(clipboard empty)', exitCode: 0 };
+                }
+            } catch (err) {
+                return { output: `Clipboard read error: ${err.message}`, exitCode: 1 };
+            }
+        },
+        async write_clipboard(args) {
+            try {
+                const text = args?.text || '';
+                if (process.platform === 'win32') {
+                    await runPowerShell(`Set-Clipboard -Value '${text.replace(/'/g, "''")}'`);
+                } else {
+                    await runShellCommand(`echo "${text}" | pbcopy 2>/dev/null || echo "${text}" | xclip -selection clipboard`, '');
+                }
+                return { output: `Copied to clipboard: "${text.substring(0, 100)}"`, exitCode: 0 };
+            } catch (err) {
+                return { output: `Clipboard write error: ${err.message}`, exitCode: 1 };
+            }
+        }
+    },
+
+    // ── Filesystem ──────────────────────────────────────────────────────────
+    filesystem: {
+        async list_directory(args) {
+            try {
+                const dirPath = args?.path || DEFAULT_CWD;
+                const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+                const result = entries.map(e => {
+                    const stat = fs.statSync(path.join(dirPath, e.name));
+                    return `${e.isDirectory() ? '[DIR] ' : '[FILE]'} ${e.name}${e.isFile() ? ` (${formatSize(stat.size)})` : ''}`;
+                }).join('\n');
+                return { output: result || '(empty directory)', exitCode: 0 };
+            } catch (err) {
+                return { output: `Error: ${err.message}`, exitCode: 1 };
+            }
+        },
+        async read_file(args) {
+            try {
+                const filePath = args?.path;
+                if (!filePath) return { output: 'Error: path is required', exitCode: 1 };
+                const stat = fs.statSync(filePath);
+                if (stat.size > 1024 * 1024) return { output: `File too large (${formatSize(stat.size)}). Max 1MB.`, exitCode: 1 };
+                const content = fs.readFileSync(filePath, 'utf8');
+                return { output: content, exitCode: 0 };
+            } catch (err) {
+                return { output: `Error: ${err.message}`, exitCode: 1 };
+            }
+        },
+        async write_file(args) {
+            try {
+                const filePath = args?.path;
+                const content = args?.content;
+                if (!filePath || content === undefined) return { output: 'Error: path and content are required', exitCode: 1 };
+                fs.writeFileSync(filePath, content, 'utf8');
+                return { output: `Written ${content.length} chars to ${filePath}`, exitCode: 0 };
+            } catch (err) {
+                return { output: `Error: ${err.message}`, exitCode: 1 };
+            }
+        },
+        async move_file(args) {
+            try {
+                if (!args?.source || !args?.destination) return { output: 'Error: source and destination required', exitCode: 1 };
+                fs.renameSync(args.source, args.destination);
+                return { output: `Moved: ${args.source} → ${args.destination}`, exitCode: 0 };
+            } catch (err) {
+                return { output: `Error: ${err.message}`, exitCode: 1 };
+            }
+        },
+        async copy_file(args) {
+            try {
+                if (!args?.source || !args?.destination) return { output: 'Error: source and destination required', exitCode: 1 };
+                fs.copyFileSync(args.source, args.destination);
+                return { output: `Copied: ${args.source} → ${args.destination}`, exitCode: 0 };
+            } catch (err) {
+                return { output: `Error: ${err.message}`, exitCode: 1 };
+            }
+        },
+        async delete_file(args) {
+            try {
+                if (!args?.path) return { output: 'Error: path is required', exitCode: 1 };
+                const stat = fs.statSync(args.path);
+                if (stat.isDirectory()) {
+                    fs.rmSync(args.path, { recursive: true });
+                } else {
+                    fs.unlinkSync(args.path);
+                }
+                return { output: `Deleted: ${args.path}`, exitCode: 0 };
+            } catch (err) {
+                return { output: `Error: ${err.message}`, exitCode: 1 };
+            }
+        },
+        async search_files(args) {
+            try {
+                const dir = args?.path || DEFAULT_CWD;
+                const pattern = args?.pattern || '*';
+                const maxDepth = args?.maxDepth || 3;
+                const results = [];
+                searchRecursive(dir, new RegExp(pattern.replace(/\*/g, '.*'), 'i'), 0, maxDepth, results);
+                return { output: results.length ? results.join('\n') : 'No files found', exitCode: 0 };
+            } catch (err) {
+                return { output: `Error: ${err.message}`, exitCode: 1 };
+            }
+        },
+        async file_info(args) {
+            try {
+                if (!args?.path) return { output: 'Error: path is required', exitCode: 1 };
+                const stat = fs.statSync(args.path);
+                const info = [
+                    `Path: ${args.path}`,
+                    `Type: ${stat.isDirectory() ? 'Directory' : 'File'}`,
+                    `Size: ${formatSize(stat.size)}`,
+                    `Created: ${stat.birthtime.toISOString()}`,
+                    `Modified: ${stat.mtime.toISOString()}`,
+                    `Permissions: ${stat.mode.toString(8)}`
+                ].join('\n');
+                return { output: info, exitCode: 0 };
+            } catch (err) {
+                return { output: `Error: ${err.message}`, exitCode: 1 };
+            }
+        }
+    },
+
+    // ── System Info ─────────────────────────────────────────────────────────
+    sysinfo: {
+        async system_info() {
+            const cpus = os.cpus();
+            const totalMem = os.totalmem();
+            const freeMem = os.freemem();
+            const info = [
+                `Hostname: ${os.hostname()}`,
+                `Platform: ${os.platform()} ${os.arch()}`,
+                `OS: ${os.type()} ${os.release()}`,
+                `CPU: ${cpus[0]?.model || 'Unknown'} (${cpus.length} cores)`,
+                `RAM: ${formatSize(totalMem - freeMem)} used / ${formatSize(totalMem)} total (${Math.round((1 - freeMem / totalMem) * 100)}%)`,
+                `Uptime: ${formatUptime(os.uptime())}`,
+                `User: ${os.userInfo().username}`,
+                `Home: ${os.homedir()}`
+            ].join('\n');
+            return { output: info, exitCode: 0 };
+        },
+        async disk_usage() {
+            if (process.platform === 'win32') {
+                const { output } = await runShellCommand('wmic logicaldisk get size,freespace,caption /format:list', '');
+                return { output, exitCode: 0 };
+            }
+            const { output } = await runShellCommand('df -h', '');
+            return { output, exitCode: 0 };
+        },
+        async running_processes() {
+            if (process.platform === 'win32') {
+                const { output } = await runShellCommand('tasklist /FO CSV /NH | sort /R /+2', '');
+                const lines = output.split('\n').slice(0, 30);
+                return { output: `Top 30 processes:\n${lines.join('\n')}`, exitCode: 0 };
+            }
+            const { output } = await runShellCommand('ps aux --sort=-%mem | head -30', '');
+            return { output, exitCode: 0 };
+        },
+        async network_info() {
+            const interfaces = os.networkInterfaces();
+            const lines = [];
+            for (const [name, addrs] of Object.entries(interfaces)) {
+                for (const addr of addrs) {
+                    if (addr.family === 'IPv4') {
+                        lines.push(`${name}: ${addr.address}${addr.internal ? ' (internal)' : ''}`);
+                    }
+                }
+            }
+            return { output: lines.join('\n') || 'No network interfaces', exitCode: 0 };
+        }
+    },
+
+    // ── App Launcher ────────────────────────────────────────────────────────
+    launcher: {
+        async open_app(args) {
+            const app = args?.app || args?.path || '';
+            if (!app) return { output: 'Error: app name or path is required', exitCode: 1 };
+            try {
+                if (process.platform === 'win32') {
+                    await runShellCommand(`start "" "${app}"`, '');
+                } else if (process.platform === 'darwin') {
+                    await runShellCommand(`open "${app}"`, '');
+                } else {
+                    await runShellCommand(`xdg-open "${app}"`, '');
+                }
+                return { output: `Opened: ${app}`, exitCode: 0 };
+            } catch (err) {
+                return { output: `Error opening ${app}: ${err.message}`, exitCode: 1 };
+            }
+        },
+        async open_url(args) {
+            const url = args?.url || '';
+            if (!url) return { output: 'Error: url is required', exitCode: 1 };
+            try {
+                if (process.platform === 'win32') {
+                    await runShellCommand(`start "" "${url}"`, '');
+                } else if (process.platform === 'darwin') {
+                    await runShellCommand(`open "${url}"`, '');
+                } else {
+                    await runShellCommand(`xdg-open "${url}"`, '');
+                }
+                return { output: `Opened URL: ${url}`, exitCode: 0 };
+            } catch (err) {
+                return { output: `Error: ${err.message}`, exitCode: 1 };
+            }
+        },
+        async open_folder(args) {
+            const folder = args?.path || DEFAULT_CWD;
+            try {
+                if (process.platform === 'win32') {
+                    await runShellCommand(`explorer "${folder}"`, '');
+                } else if (process.platform === 'darwin') {
+                    await runShellCommand(`open "${folder}"`, '');
+                } else {
+                    await runShellCommand(`xdg-open "${folder}"`, '');
+                }
+                return { output: `Opened folder: ${folder}`, exitCode: 0 };
+            } catch (err) {
+                return { output: `Error: ${err.message}`, exitCode: 1 };
+            }
+        }
+    }
+};
+
+// ─── Helper functions ────────────────────────────────────────────────────────
+
+function runPowerShell(script) {
+    return new Promise((resolve, reject) => {
+        execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
+            timeout: 30000,
+            maxBuffer: 1024 * 1024 * 5
+        }, (error, stdout, stderr) => {
+            if (error) reject(new Error(stderr || error.message));
+            else resolve(stdout.trim());
         });
     });
 }
 
-// ─── MCP Client ──────────────────────────────────────────────────────────────
-
-async function initMcpSdk() {
-    try {
-        const clientMod = await import('@modelcontextprotocol/sdk/client/index.js');
-        const transportMod = await import('@modelcontextprotocol/sdk/client/stdio.js');
-        Client = clientMod.Client;
-        StdioClientTransport = transportMod.StdioClientTransport;
-        mcpSdkAvailable = true;
-        console.log('[MCP] SDK loaded successfully');
-    } catch (err) {
-        console.warn('[MCP] SDK not installed. MCP tools will be unavailable.');
-        console.warn('[MCP] Install with: npm install @modelcontextprotocol/sdk');
-        mcpSdkAvailable = false;
-    }
+function formatSize(bytes) {
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let i = 0;
+    while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
+    return `${bytes.toFixed(1)} ${units[i]}`;
 }
 
-async function connectMcpServer(name) {
-    if (!mcpSdkAvailable) return false;
-    const server = MCP_SERVERS[name];
-    if (!server || server.ready) return server?.ready || false;
-
-    try {
-        console.log(`[MCP] Connecting to ${name} server...`);
-        const transport = new StdioClientTransport({
-            command: server.command,
-            args: server.args
-        });
-
-        const client = new Client({ name: `local-agent-${name}`, version: '1.0.0' });
-        await client.connect(transport);
-
-        // List available tools
-        const { tools } = await client.listTools();
-        console.log(`[MCP] ${name} server connected. Tools:`, tools.map(t => t.name).join(', '));
-
-        server.client = client;
-        server.transport = transport;
-        server.ready = true;
-        return true;
-    } catch (err) {
-        console.error(`[MCP] Failed to connect ${name}:`, err.message);
-        server.ready = false;
-        return false;
-    }
+function formatUptime(seconds) {
+    const d = Math.floor(seconds / 86400);
+    const h = Math.floor((seconds % 86400) / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    return `${d}d ${h}h ${m}m`;
 }
+
+function searchRecursive(dir, regex, depth, maxDepth, results) {
+    if (depth > maxDepth || results.length > 100) return;
+    try {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            if (regex.test(entry.name)) results.push(fullPath);
+            if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules') {
+                searchRecursive(fullPath, regex, depth + 1, maxDepth, results);
+            }
+        }
+    } catch { }
+}
+
+// ─── MCP Tool dispatcher ────────────────────────────────────────────────────
 
 async function runMcpTool(serverName, toolName, args) {
-    const server = MCP_SERVERS[serverName];
+    const server = mcpTools[serverName];
+    if (!server) {
+        return { output: `Unknown MCP server: "${serverName}". Available: ${Object.keys(mcpTools).join(', ')}`, exitCode: 1 };
+    }
 
-    // Lazy connect on first use
-    if (!server?.ready) {
-        const connected = await connectMcpServer(serverName);
-        if (!connected) {
-            return { output: `MCP server "${serverName}" is not available. Install it first.`, exitCode: 1 };
-        }
+    const tool = server[toolName];
+    if (!tool) {
+        const available = Object.keys(server).join(', ');
+        return { output: `Unknown tool "${toolName}" in ${serverName}. Available: ${available}`, exitCode: 1 };
     }
 
     try {
-        console.log(`[MCP] Calling ${serverName}.${toolName}(${JSON.stringify(args)})`);
-        const result = await server.client.callTool({ name: toolName, arguments: args || {} });
-
-        // Extract text content from MCP response
-        let output = '';
-        if (result.content && Array.isArray(result.content)) {
-            for (const item of result.content) {
-                if (item.type === 'text') {
-                    output += item.text + '\n';
-                } else if (item.type === 'image') {
-                    // Return base64 image data with prefix for frontend display
-                    output += `[IMAGE:${item.mimeType}]${item.data}\n`;
-                } else if (item.type === 'resource') {
-                    output += JSON.stringify(item.resource) + '\n';
-                }
-            }
-        } else {
-            output = JSON.stringify(result);
-        }
-
-        return { output: output.trim() || '(no output)', exitCode: result.isError ? 1 : 0 };
+        return await tool(args || {});
     } catch (err) {
-        console.error(`[MCP] Tool error ${serverName}.${toolName}:`, err.message);
-        // Try to reconnect once
-        server.ready = false;
-        return { output: `MCP error: ${err.message}`, exitCode: 1 };
+        return { output: `MCP error (${serverName}.${toolName}): ${err.message}`, exitCode: 1 };
     }
-}
-
-// ─── MCP tool name mapping ───────────────────────────────────────────────────
-
-function resolveMcpToolName(serverName, command, args) {
-    // Map our internal command names to actual MCP tool names
-    // These will be discovered dynamically, but we provide sensible defaults
-    if (serverName === 'screenshot') {
-        return { toolName: command || 'capture_screenshot', toolArgs: args || {} };
-    }
-    if (serverName === 'clipboard') {
-        if (command === 'write_clipboard') {
-            return { toolName: 'write_clipboard', toolArgs: { text: args?.text || '' } };
-        }
-        return { toolName: 'read_clipboard', toolArgs: {} };
-    }
-    return { toolName: command, toolArgs: args || {} };
 }
 
 // ─── Main poll loop ──────────────────────────────────────────────────────────
@@ -214,22 +419,19 @@ function resolveMcpToolName(serverName, command, args) {
 async function poll() {
     try {
         const cmd = await request('GET', `${VPS_URL}/api/local-exec/pending`);
-        if (!cmd || !cmd._id) return; // nothing pending
+        if (!cmd || !cmd._id) return;
 
         let output, exitCode;
 
         if (cmd.execType === 'mcp' && cmd.mcpServer) {
-            // MCP tool execution
-            console.log(`[LocalExecAgent] MCP: ${cmd.mcpServer}.${cmd.command}`);
-            const { toolName, toolArgs } = resolveMcpToolName(cmd.mcpServer, cmd.command, cmd.mcpArgs);
-            ({ output, exitCode } = await runMcpTool(cmd.mcpServer, toolName, toolArgs));
+            console.log(`[Agent] MCP: ${cmd.mcpServer}.${cmd.command}`);
+            ({ output, exitCode } = await runMcpTool(cmd.mcpServer, cmd.command, cmd.mcpArgs));
         } else {
-            // Shell command execution (legacy)
-            console.log(`[LocalExecAgent] Shell: ${cmd.command}`);
-            ({ output, exitCode } = await runCommand(cmd.command, cmd.cwd));
+            console.log(`[Agent] Shell: ${cmd.command}`);
+            ({ output, exitCode } = await runShellCommand(cmd.command, cmd.cwd));
         }
 
-        console.log(`[LocalExecAgent] Done (exit ${exitCode}):`, output.substring(0, 200));
+        console.log(`[Agent] Done (exit ${exitCode}):`, output.substring(0, 200));
 
         await request('POST', `${VPS_URL}/api/local-exec/result/${cmd._id}`, {
             output,
@@ -238,26 +440,16 @@ async function poll() {
         });
     } catch (err) {
         if (!err.message.includes('ECONNREFUSED') && !err.message.includes('timeout')) {
-            console.error('[LocalExecAgent] Error:', err.message);
+            console.error('[Agent] Error:', err.message);
         }
     }
 }
 
 // ─── Start ───────────────────────────────────────────────────────────────────
 
-async function main() {
-    console.log(`[LocalExecAgent] Started. Polling ${VPS_URL} every ${POLL_MS}ms`);
-    console.log(`[LocalExecAgent] Default CWD: ${DEFAULT_CWD}`);
+console.log(`[Agent] Started. Polling ${VPS_URL} every ${POLL_MS}ms`);
+console.log(`[Agent] Default CWD: ${DEFAULT_CWD}`);
+console.log(`[Agent] MCP tools: ${Object.entries(mcpTools).map(([k, v]) => `${k}(${Object.keys(v).join(',')})`).join(' | ')}`);
 
-    // Try to load MCP SDK
-    await initMcpSdk();
-
-    if (mcpSdkAvailable) {
-        console.log('[LocalExecAgent] MCP servers will connect on first use (lazy loading)');
-    }
-
-    setInterval(poll, POLL_MS);
-    poll(); // first poll immediately
-}
-
-main();
+setInterval(poll, POLL_MS);
+poll();

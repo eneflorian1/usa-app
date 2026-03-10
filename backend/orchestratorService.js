@@ -6,6 +6,7 @@ const { executeCodingAction } = require('./codingAgentService');
 const { executeGhIssuesAction } = require('./ghIssuesService');
 const { executeProcessAction } = require('./processManagerService');
 const { executeWebAgentAction } = require('./webAgentService');
+const os = require('os');
 
 /**
  * ReAct Orchestrator Service
@@ -75,13 +76,39 @@ Pentru LOCAL EXEC (execuție comandă pe PC-ul local al utilizatorului — comen
 
 Pentru SCREENSHOT (captură ecran de pe PC-ul local):
 <SCREENSHOT_JSON>{"area":"full"}</SCREENSHOT_JSON>
-<SCREENSHOT_JSON>{"area":"window","windowTitle":"Chrome"}</SCREENSHOT_JSON>
-- Folosește când utilizatorul cere screenshot, captură ecran, "ce am pe ecran", "arată-mi ecranul"
+- Folosește pentru: screenshot, captură ecran, "ce am pe ecran", "arată-mi ecranul", print screen
 
 Pentru CLIPBOARD (citire/scriere clipboard de pe PC-ul local):
 <CLIPBOARD_JSON>{"action":"read"}</CLIPBOARD_JSON>
 <CLIPBOARD_JSON>{"action":"write","text":"text de copiat"}</CLIPBOARD_JSON>
-- Folosește când utilizatorul cere "ce am copiat", "ce e în clipboard", "copiază textul X"
+- Folosește pentru: "ce am copiat", "ce e în clipboard", "copiază textul X", paste
+
+Pentru FILESYSTEM (operații fișiere pe PC-ul local):
+<FILESYSTEM_JSON>{"action":"list_directory","path":"C:\\Users\\Admin\\Desktop"}</FILESYSTEM_JSON>
+<FILESYSTEM_JSON>{"action":"read_file","path":"C:\\Users\\Admin\\Documents\\note.txt"}</FILESYSTEM_JSON>
+<FILESYSTEM_JSON>{"action":"write_file","path":"C:\\Users\\Admin\\Desktop\\test.txt","content":"Hello!"}</FILESYSTEM_JSON>
+<FILESYSTEM_JSON>{"action":"move_file","source":"C:\\old.txt","destination":"C:\\new.txt"}</FILESYSTEM_JSON>
+<FILESYSTEM_JSON>{"action":"copy_file","source":"C:\\file.txt","destination":"C:\\backup.txt"}</FILESYSTEM_JSON>
+<FILESYSTEM_JSON>{"action":"delete_file","path":"C:\\Users\\Admin\\Desktop\\trash.txt"}</FILESYSTEM_JSON>
+<FILESYSTEM_JSON>{"action":"search_files","path":"C:\\Users\\Admin","pattern":"*.pdf","maxDepth":3}</FILESYSTEM_JSON>
+<FILESYSTEM_JSON>{"action":"file_info","path":"C:\\Users\\Admin\\Documents"}</FILESYSTEM_JSON>
+- Folosește pentru: listare foldere, citire fișiere, creare fișiere, mutare, copiere, ștergere, căutare fișiere
+- "deschide folderul Documents" → LAUNCHER_JSON, NU filesystem
+- "ce fișiere am pe Desktop" → FILESYSTEM_JSON list_directory
+
+Pentru SYSINFO (informații sistem PC local):
+<SYSINFO_JSON>{"action":"system_info"}</SYSINFO_JSON>
+<SYSINFO_JSON>{"action":"disk_usage"}</SYSINFO_JSON>
+<SYSINFO_JSON>{"action":"running_processes"}</SYSINFO_JSON>
+<SYSINFO_JSON>{"action":"network_info"}</SYSINFO_JSON>
+- Folosește pentru: "cât RAM am", "ce procese rulează", "spațiu pe disk", "IP-ul meu"
+
+Pentru LAUNCHER (deschide aplicații/foldere/URL-uri pe PC-ul local):
+<LAUNCHER_JSON>{"action":"open_folder","path":"C:\\Users\\Admin\\Documents"}</LAUNCHER_JSON>
+<LAUNCHER_JSON>{"action":"open_app","app":"notepad"}</LAUNCHER_JSON>
+<LAUNCHER_JSON>{"action":"open_url","url":"https://google.com"}</LAUNCHER_JSON>
+- Folosește pentru: "deschide folderul X", "deschide Notepad", "deschide Chrome pe site-ul Y"
+- DIFERIT de LOCAL_EXEC: launcher deschide vizual, LOCAL_EXEC rulează în terminal
 
 Pentru CRON JOBS (programare acțiuni recurente):
 <CRON_JSON>{"action":"create","name":"Morning reminder","cron":"0 8 * * *","type":"notification","payload":{"message":"Time to start the day!"}}</CRON_JSON>
@@ -152,12 +179,18 @@ function cleanAllTags(text) {
         .replace(/<LOCAL_EXEC_JSON>[\s\S]*?<\/LOCAL_EXEC_JSON>/g, '')
         .replace(/<SCREENSHOT_JSON>[\s\S]*?<\/SCREENSHOT_JSON>/g, '')
         .replace(/<CLIPBOARD_JSON>[\s\S]*?<\/CLIPBOARD_JSON>/g, '')
+        .replace(/<FILESYSTEM_JSON>[\s\S]*?<\/FILESYSTEM_JSON>/g, '')
+        .replace(/<SYSINFO_JSON>[\s\S]*?<\/SYSINFO_JSON>/g, '')
+        .replace(/<LAUNCHER_JSON>[\s\S]*?<\/LAUNCHER_JSON>/g, '')
         .trim();
 }
 
-function detectIntent(text, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData, localExecData, screenshotData, clipboardData) {
+function detectIntent(text, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData, localExecData, screenshotData, clipboardData, filesystemData, sysinfoData, launcherData) {
     if (screenshotData) return 'screenshot';
     if (clipboardData) return 'clipboard';
+    if (filesystemData) return 'filesystem';
+    if (sysinfoData) return 'sysinfo';
+    if (launcherData) return 'launcher';
     if (localExecData) return 'local-exec';
     if (webAgentData) return 'web-agent';
     if (escalateData) return 'escalate';
@@ -171,6 +204,9 @@ function detectIntent(text, bookingData, taskData, escalateData, githubData, cro
     const lower = text.toLowerCase();
     if (/screenshot|captură.*ecran|captur.*ecran|print.*screen|ce am pe ecran|arată.*ecranul/.test(lower)) return 'screenshot';
     if (/clipboard|copiat|ce am copiat|paste|lipit/.test(lower)) return 'clipboard';
+    if (/fișier|folder|director|listea.*fișier|caut[aă].*fișier|citește.*fișier|scrie.*fișier|conținut.*fișier|ce fișiere/.test(lower)) return 'filesystem';
+    if (/sistem|cpu|ram|memorie|disk|spațiu|procese.*rulează|ip.*meu|uptime|network/.test(lower)) return 'sysinfo';
+    if (/deschide.*folder|deschide.*notepad|deschide.*chrome|deschide.*url|deschide.*aplicați|open.*folder/.test(lower)) return 'launcher';
     if (/mergi pe|deschide site|navigheaz|comand[aă].*pe|caut[aă].*pe.*web|completea.*formular|browser|web.*agent|automat.*web|wolt|uber.*eats|booking\.com|ryanair|emag|amazon/.test(lower)) return 'web-agent';
     if (/execut[aă].*local|rulea.*pe pc|comand[aă].*local|local.*exec|pe pc|pe local|pe computer|deschide.*pe.*pc|rulează.*local/.test(lower)) return 'local-exec';
     if (/(?<!\bvs\s)\bcod(?!e[\s.])|fix\b|bug|refactor|review.*pr|analize.*cod|implementea|debug/.test(lower)) return 'coding';
@@ -223,7 +259,10 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
     const localExecData = extractJSON(responseText, 'LOCAL_EXEC_JSON');
     const screenshotData = extractJSON(responseText, 'SCREENSHOT_JSON');
     const clipboardData = extractJSON(responseText, 'CLIPBOARD_JSON');
-    const intent = detectIntent(userMessage, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData, localExecData, screenshotData, clipboardData);
+    const filesystemData = extractJSON(responseText, 'FILESYSTEM_JSON');
+    const sysinfoData = extractJSON(responseText, 'SYSINFO_JSON');
+    const launcherData = extractJSON(responseText, 'LAUNCHER_JSON');
+    const intent = detectIntent(userMessage, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData, localExecData, screenshotData, clipboardData, filesystemData, sysinfoData, launcherData);
 
     // Clean response
     responseText = cleanAllTags(responseText);
@@ -435,6 +474,66 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
             console.log('[Orchestrator] MCP Clipboard queued → id', doc._id);
         } catch (err) {
             console.error('[Orchestrator] Clipboard error:', err.message);
+            localExecResult = { success: false, error: err.message };
+        }
+    }
+
+    // Process Filesystem MCP action
+    if (filesystemData || (intent === 'filesystem' && !localExecResult)) {
+        try {
+            const LocalExecCommand = mongoose.model('LocalExecCommand');
+            const args = filesystemData || { action: 'list_directory', path: DEFAULT_CWD };
+            const doc = await LocalExecCommand.create({
+                command: args.action || 'list_directory',
+                label: `Filesystem: ${args.action || 'list'}`,
+                execType: 'mcp',
+                mcpServer: 'filesystem',
+                mcpArgs: args
+            });
+            localExecResult = { success: true, id: doc._id, command: doc.command, label: doc.label, status: 'pending', type: 'mcp' };
+            console.log('[Orchestrator] MCP Filesystem queued → id', doc._id);
+        } catch (err) {
+            console.error('[Orchestrator] Filesystem error:', err.message);
+            localExecResult = { success: false, error: err.message };
+        }
+    }
+
+    // Process SysInfo MCP action
+    if (sysinfoData || (intent === 'sysinfo' && !localExecResult)) {
+        try {
+            const LocalExecCommand = mongoose.model('LocalExecCommand');
+            const args = sysinfoData || { action: 'system_info' };
+            const doc = await LocalExecCommand.create({
+                command: args.action || 'system_info',
+                label: `SysInfo: ${args.action || 'info'}`,
+                execType: 'mcp',
+                mcpServer: 'sysinfo',
+                mcpArgs: args
+            });
+            localExecResult = { success: true, id: doc._id, command: doc.command, label: doc.label, status: 'pending', type: 'mcp' };
+            console.log('[Orchestrator] MCP SysInfo queued → id', doc._id);
+        } catch (err) {
+            console.error('[Orchestrator] SysInfo error:', err.message);
+            localExecResult = { success: false, error: err.message };
+        }
+    }
+
+    // Process Launcher MCP action
+    if (launcherData || (intent === 'launcher' && !localExecResult)) {
+        try {
+            const LocalExecCommand = mongoose.model('LocalExecCommand');
+            const args = launcherData || { action: 'open_folder', path: os.homedir() };
+            const doc = await LocalExecCommand.create({
+                command: args.action || 'open_folder',
+                label: `Launcher: ${args.action || 'open'}`,
+                execType: 'mcp',
+                mcpServer: 'launcher',
+                mcpArgs: args
+            });
+            localExecResult = { success: true, id: doc._id, command: doc.command, label: doc.label, status: 'pending', type: 'mcp' };
+            console.log('[Orchestrator] MCP Launcher queued → id', doc._id);
+        } catch (err) {
+            console.error('[Orchestrator] Launcher error:', err.message);
             localExecResult = { success: false, error: err.message };
         }
     }
