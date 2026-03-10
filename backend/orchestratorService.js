@@ -413,6 +413,36 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
         }
     }
 
+    // Process Coding Loop — autonomous multi-step coding agent
+    if (codingLoopData && codingLoopData.task) {
+        try {
+            const { runCodingLoop } = require('./codingLoopService');
+            const CodingSession = mongoose.model('CodingSession');
+            const projectPath = `C:\\Users\\Admin\\Documents\\GitHub\\${codingLoopData.project || 'usa-app'}`;
+            const session = await CodingSession.create({
+                task: codingLoopData.task,
+                projectPath,
+                projectName: codingLoopData.project || 'usa-app'
+            });
+            // Run loop in background (don't await)
+            runCodingLoop(codingLoopData.task, projectPath, session._id.toString()).catch(err => {
+                console.error('[CodingLoop] Fatal:', err.message);
+            });
+            codingResult = {
+                success: true,
+                sessionId: session._id,
+                task: codingLoopData.task,
+                project: codingLoopData.project,
+                status: 'running',
+                message: `Coding session started. Track progress at /coding or /api/coding/sessions/${session._id}`
+            };
+            console.log('[Orchestrator] CodingLoop started:', codingLoopData.task, '→ session', session._id);
+        } catch (err) {
+            console.error('[Orchestrator] CodingLoop error:', err.message);
+            codingResult = { success: false, error: err.message };
+        }
+    }
+
     // Process Local Exec action — queues command for local PC agent
     if (localExecData && localExecData.command) {
         try {

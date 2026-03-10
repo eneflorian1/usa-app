@@ -303,6 +303,13 @@ const UgcProductSchema = new mongoose.Schema({
     name: String,
     uploadedAt: { type: Date, default: Date.now }
   }],
+  avatarImages: [{
+    imageData: String,
+    mimeType: { type: String, default: 'image/jpeg' },
+    name: String,
+    label: { type: String, default: '' },
+    uploadedAt: { type: Date, default: Date.now }
+  }],
   referenceImages: [{
     imageData: String,
     mimeType: { type: String, default: 'image/jpeg' },
@@ -1816,6 +1823,49 @@ app.delete('/api/ugc-product/:id/reference-images/:imgIdx', async (req, res) => 
   }
 });
 
+// Add Avatar Images
+app.post('/api/ugc-product/:id/avatar-images', async (req, res) => {
+  try {
+    const { images } = req.body; // Array of { name, mimeType, imageData, label }
+    if (!Array.isArray(images) || images.length === 0) {
+      return res.status(400).json({ error: 'images array is required' });
+    }
+    const product = await UgcProduct.findById(req.params.id);
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+
+    for (const img of images) {
+      if (!img.imageData) continue;
+      product.avatarImages.push({
+        imageData: img.imageData,
+        mimeType: img.mimeType || 'image/jpeg',
+        name: img.name || `avatar_${Date.now()}`,
+        label: img.label || `Avatar Image ${product.avatarImages.length + 1}`,
+      });
+    }
+    product.updatedAt = Date.now();
+    await product.save();
+    res.json({ count: images.length, totalAvatarImages: product.avatarImages.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete Avatar image
+app.delete('/api/ugc-product/:id/avatar-images/:imgIdx', async (req, res) => {
+  try {
+    const product = await UgcProduct.findById(req.params.id);
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+    const idx = parseInt(req.params.imgIdx);
+    if (idx < 0 || idx >= product.avatarImages.length) return res.status(404).json({ error: 'Image index out of range' });
+    product.avatarImages.splice(idx, 1);
+    product.updatedAt = Date.now();
+    await product.save();
+    res.json({ message: 'Avatar image deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Update system prompt
 app.put('/api/ugc-product/:id/system-prompt', async (req, res) => {
   try {
@@ -1880,11 +1930,13 @@ app.post('/api/ugc-product/:id/generate', async (req, res) => {
     (async () => {
       try {
         const prodImages = product.productImages.map(p => ({ data: p.imageData, mimeType: p.mimeType }));
+        const avaImages = product.avatarImages ? product.avatarImages.map(p => ({ data: p.imageData, mimeType: p.mimeType })) : [];
         const result = await ugcProductService.generateProductUGC(
           prodImages,
           product.visualBible,
           prompt,
-          { aspectRatio: aspectRatio || 'auto' }
+          { aspectRatio: aspectRatio || 'auto' },
+          avaImages
         );
 
         // Update the generation entry
@@ -1916,10 +1968,34 @@ app.post('/api/ugc-product/:id/generate', async (req, res) => {
   }
 });
 
+// Cancel ongoing generations
+app.post('/api/ugc-product/:id/cancel-generation', async (req, res) => {
+  try {
+    const product = await UgcProduct.findById(req.params.id);
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+
+    let cancelled = 0;
+    for (const gen of product.generations) {
+      if (gen.status === 'pending') {
+        gen.status = 'cancelled';
+        cancelled++;
+      }
+    }
+
+    if (cancelled > 0) {
+      product.updatedAt = Date.now();
+      await product.save();
+    }
+    res.json({ message: `Cancelled ${cancelled} pending generations` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Generate UGC Content Collection (Auto 10 variations)
 app.post('/api/ugc-product/:id/generate-collection', async (req, res) => {
   try {
-    const { count = 10, aspectRatio = 'auto' } = req.body;
+    const { count = 10, aspectRatio = 'auto', avatarDesc = '' } = req.body;
     const product = await UgcProduct.findById(req.params.id);
     if (!product) return res.status(404).json({ error: 'Product not found' });
     if (product.productImages.length === 0) {
@@ -1932,7 +2008,7 @@ app.post('/api/ugc-product/:id/generate-collection', async (req, res) => {
     // Generate 10 text prompts
     let scenePrompts;
     try {
-      scenePrompts = await ugcProductService.generateScenePrompts(product.visualBible, count);
+      scenePrompts = await ugcProductService.generateScenePrompts(product.visualBible, count, avatarDesc);
     } catch (e) {
       return res.status(500).json({ error: 'Failed to generate scene prompts: ' + e.message });
     }
@@ -1959,13 +2035,26 @@ app.post('/api/ugc-product/:id/generate-collection', async (req, res) => {
     // Run in background (processing sequentially to avoid rate limits, or batch them)
     (async () => {
       const prodImages = product.productImages.map(p => ({ data: p.imageData, mimeType: p.mimeType }));
+      const avaImages = product.avatarImages ? product.avatarImages.map(p => ({ data: p.imageData, mimeType: p.mimeType })) : [];
+
       for (const genInfo of addedGenerations) {
         try {
+          // Check if it was cancelled before starting generating
+          const checkProduct = await UgcProduct.findById(req.params.id);
+          if (checkProduct) {
+            const currentGen = checkProduct.generations.id(genInfo._id);
+            if (!currentGen || currentGen.status === 'cancelled') {
+              console.log(`[UGC Product] Generation ${genInfo._id} cancelled, skipping.`);
+              continue;
+            }
+          }
+
           const result = await ugcProductService.generateProductUGC(
             prodImages,
             product.visualBible,
             genInfo.prompt,
-            { aspectRatio: aspectRatio }
+            { aspectRatio: aspectRatio },
+            avaImages
           );
 
           // Update the generation entry
