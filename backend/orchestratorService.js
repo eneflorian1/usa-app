@@ -96,7 +96,11 @@ COMPORTAMENT:
 - Dacă utilizatorul salută → răspunde prietenos, fără TOOL
 - Dacă vrea rezervare dar lipsesc date → întreabă ce lipsește
 - Dacă este frustrat (!!!, caps, "nu funcționează") → escaladează
-- Dacă utilizatorul vrea să ruleze o comandă pe PC-ul local → folosește LOCAL_EXEC_JSON
+- Dacă utilizatorul vrea să ruleze o comandă pe PC-ul local → OBLIGATORIU generează tag-ul <LOCAL_EXEC_JSON>{"command":"...","label":"...","cwd":"..."}</LOCAL_EXEC_JSON>
+- Orice referire la "pe PC", "pe local", "deschide pe computer", "rulează local", "pe calculatorul meu" → LOCAL_EXEC_JSON
+- Exemple: "deschide VS Code" → <LOCAL_EXEC_JSON>{"command":"code .","label":"Open VS Code"}</LOCAL_EXEC_JSON>
+- Exemple: "dir Desktop" → <LOCAL_EXEC_JSON>{"command":"dir C:\\Users\\Admin\\Desktop","label":"List Desktop"}</LOCAL_EXEC_JSON>
+- NU răspunde doar cu text despre intenție — TREBUIE să incluzi tag-ul <LOCAL_EXEC_JSON> cu comanda reală
 - Include TOOL JSON doar când ai TOATE datele necesare
 - NU inventa informații
 
@@ -152,8 +156,8 @@ function detectIntent(text, bookingData, taskData, escalateData, githubData, cro
     if (taskData) return 'planner';
     const lower = text.toLowerCase();
     if (/mergi pe|deschide site|navigheaz|comand[aă].*pe|caut[aă].*pe.*web|completea.*formular|browser|web.*agent|automat.*web|wolt|uber.*eats|booking\.com|ryanair|emag|amazon/.test(lower)) return 'web-agent';
-    if (/execut[aă].*local|rulea.*pe pc|comand[aă].*local|local.*exec/.test(lower)) return 'local-exec';
-    if (/cod|code|fix|bug|refactor|review.*pr|analize.*cod|implementea|debug/.test(lower)) return 'coding';
+    if (/execut[aă].*local|rulea.*pe pc|comand[aă].*local|local.*exec|pe pc|pe local|pe computer|deschide.*pe.*pc|rulează.*local/.test(lower)) return 'local-exec';
+    if (/(?<!\bvs\s)\bcod(?!e[\s.])|fix\b|bug|refactor|review.*pr|analize.*cod|implementea|debug/.test(lower)) return 'coding';
     if (/auto.?fix|repar.*issue|fixeaz.*issue|batch.*fix/.test(lower)) return 'gh-issues';
     if (/proces|session|spawn|background|kill.*proc|oprește.*proc/.test(lower)) return 'process';
     if (/cron|schedul|recurent|programea|repeat|remind.*every|amintește.*fiecare|în fiecare|la fiecare/.test(lower)) return 'cron';
@@ -356,6 +360,25 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
         } catch (err) {
             console.error('[Orchestrator] LocalExec error:', err.message);
             localExecResult = { success: false, error: err.message };
+        }
+    }
+
+    // Fallback: intent is local-exec but Gemini didn't generate the tag — extract command from message
+    if (intent === 'local-exec' && !localExecResult) {
+        try {
+            const cmdMatch = userMessage.match(/:\s*(.+)$/) || userMessage.match(/comanda?\s+["""]?(.+?)["""]?\s*$/i);
+            if (cmdMatch) {
+                const LocalExecCommand = mongoose.model('LocalExecCommand');
+                const doc = await LocalExecCommand.create({
+                    command: cmdMatch[1].trim(),
+                    label: 'Auto-extracted from chat',
+                    cwd: ''
+                });
+                localExecResult = { success: true, id: doc._id, command: doc.command, label: doc.label, status: 'pending' };
+                console.log('[Orchestrator] LocalExec fallback queued:', doc.command, '→ id', doc._id);
+            }
+        } catch (err) {
+            console.error('[Orchestrator] LocalExec fallback error:', err.message);
         }
     }
 
