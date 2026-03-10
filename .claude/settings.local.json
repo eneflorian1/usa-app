@@ -23,7 +23,8 @@
       "WebFetch(domain:www.npmjs.com)",
       "WebFetch(domain:github.com)",
       "WebSearch",
-      "Bash(npm install @modelcontextprotocol/sdk)"
+      "Bash(npm install @modelcontextprotocol/sdk)",
+      "Bash(timeout 5 node -e \":*)"
     ]
   }
 }
