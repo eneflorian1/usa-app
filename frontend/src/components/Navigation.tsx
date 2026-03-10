@@ -3,11 +3,12 @@
 import { useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Settings, MessageCircle, Home, BarChart2, Bell, Brain, CalendarCheck, Calendar, Eye, Box, Timer, Globe, Camera, Clapperboard, Package } from 'lucide-react';
+import { Settings, MessageCircle, Home, BarChart2, Bell, Brain, CalendarCheck, Calendar, Eye, Box, Timer, Globe, Camera, Clapperboard, Package, TerminalSquare } from 'lucide-react';
 
 const navItems = [
   { href: '/', icon: Home, label: 'Home', showOnMobile: true },
   { href: '/orchestrator', icon: Brain, label: 'Command', showOnMobile: true },
+  { href: '/terminal', icon: TerminalSquare, label: 'Terminal', showOnMobile: false },
   { href: '/glasses-memory', icon: Eye, label: 'Glasses', showOnMobile: true },
   { href: '/planner', icon: CalendarCheck, label: 'Planner', showOnMobile: true },
   { href: '/cron-jobs', icon: Timer, label: 'Cron Jobs', showOnMobile: false },
