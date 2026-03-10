@@ -18,7 +18,12 @@
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(''Response:'', d.get\\(''response'',''''\\)\\); print\\(''LocalExec:'', d.get\\(''localExec'',''none''\\)\\)\")",
       "Bash(curl -s --max-time 30 -X POST http://155.117.45.192:5000/api/orchestrator/chat -H \"Content-Type: application/json\" -d '{\"\"message\"\":\"\"Rulează pe PC-ul meu local comanda: echo test-local-exec-functioneaza\"\"}')",
       "Bash(curl -s --max-time 10 http://155.117.45.192:5000/api/local-exec/pending)",
-      "Bash(curl -s --max-time 30 -X POST http://155.117.45.192:5000/api/orchestrator/chat -H \"Content-Type: application/json\" -d '{\"\"message\"\":\"\"Deschide VS Code pe PC: code .\"\"}')"
+      "Bash(curl -s --max-time 30 -X POST http://155.117.45.192:5000/api/orchestrator/chat -H \"Content-Type: application/json\" -d '{\"\"message\"\":\"\"Deschide VS Code pe PC: code .\"\"}')",
+      "Bash(ls -la /c/Users/Admin/Documents/GitHub/usa-app/backend/*.js)",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:github.com)",
+      "WebSearch",
+      "Bash(npm install @modelcontextprotocol/sdk)"
     ]
   }
 }
