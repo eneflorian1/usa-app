@@ -68,6 +68,11 @@ Pentru WEB AGENT (automatizare browser — poate face ORICE pe web: comenzi, rez
 <WEB_AGENT_JSON>{"task":"Caută pe Google cele mai bune restaurante din Cluj","startUrl":"https://google.com"}</WEB_AGENT_JSON>
 <WEB_AGENT_JSON>{"task":"Completează formularul de contact pe site-ul X cu mesajul Y"}</WEB_AGENT_JSON>
 
+Pentru LOCAL EXEC (execuție comandă pe PC-ul local al utilizatorului — comenzi bash/shell, scripturi, deschide aplicații):
+<LOCAL_EXEC_JSON>{"command":"npm run dev","label":"Start dev server","cwd":"/home/user/project"}</LOCAL_EXEC_JSON>
+<LOCAL_EXEC_JSON>{"command":"git pull && npm install","label":"Update repo"}</LOCAL_EXEC_JSON>
+<LOCAL_EXEC_JSON>{"command":"code /path/to/file.js","label":"Open file in VS Code"}</LOCAL_EXEC_JSON>
+
 Pentru CRON JOBS (programare acțiuni recurente):
 <CRON_JSON>{"action":"create","name":"Morning reminder","cron":"0 8 * * *","type":"notification","payload":{"message":"Time to start the day!"}}</CRON_JSON>
 <CRON_JSON>{"action":"create","name":"Daily task","cron":"0 9 * * 1-5","type":"task","payload":{"title":"Check emails","priority":"medium"}}</CRON_JSON>
@@ -91,6 +96,7 @@ COMPORTAMENT:
 - Dacă utilizatorul salută → răspunde prietenos, fără TOOL
 - Dacă vrea rezervare dar lipsesc date → întreabă ce lipsește
 - Dacă este frustrat (!!!, caps, "nu funcționează") → escaladează
+- Dacă utilizatorul vrea să ruleze o comandă pe PC-ul local → folosește LOCAL_EXEC_JSON
 - Include TOOL JSON doar când ai TOATE datele necesare
 - NU inventa informații
 
@@ -129,10 +135,12 @@ function cleanAllTags(text) {
         .replace(/<PROCESS_JSON>[\s\S]*?<\/PROCESS_JSON>/g, '')
         .replace(/<CRON_JSON>[\s\S]*?<\/CRON_JSON>/g, '')
         .replace(/<WEB_AGENT_JSON>[\s\S]*?<\/WEB_AGENT_JSON>/g, '')
+        .replace(/<LOCAL_EXEC_JSON>[\s\S]*?<\/LOCAL_EXEC_JSON>/g, '')
         .trim();
 }
 
-function detectIntent(text, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData) {
+function detectIntent(text, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData, localExecData) {
+    if (localExecData) return 'local-exec';
     if (webAgentData) return 'web-agent';
     if (escalateData) return 'escalate';
     if (codingData) return 'coding';
@@ -144,6 +152,7 @@ function detectIntent(text, bookingData, taskData, escalateData, githubData, cro
     if (taskData) return 'planner';
     const lower = text.toLowerCase();
     if (/mergi pe|deschide site|navigheaz|comand[aă].*pe|caut[aă].*pe.*web|completea.*formular|browser|web.*agent|automat.*web|wolt|uber.*eats|booking\.com|ryanair|emag|amazon/.test(lower)) return 'web-agent';
+    if (/execut[aă].*local|rulea.*pe pc|comand[aă].*local|local.*exec/.test(lower)) return 'local-exec';
     if (/cod|code|fix|bug|refactor|review.*pr|analize.*cod|implementea|debug/.test(lower)) return 'coding';
     if (/auto.?fix|repar.*issue|fixeaz.*issue|batch.*fix/.test(lower)) return 'gh-issues';
     if (/proces|session|spawn|background|kill.*proc|oprește.*proc/.test(lower)) return 'process';
@@ -191,7 +200,8 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
     const ghIssuesData = extractJSON(responseText, 'GH_ISSUES_JSON');
     const processData = extractJSON(responseText, 'PROCESS_JSON');
     const webAgentData = extractJSON(responseText, 'WEB_AGENT_JSON');
-    const intent = detectIntent(userMessage, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData);
+    const localExecData = extractJSON(responseText, 'LOCAL_EXEC_JSON');
+    const intent = detectIntent(userMessage, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData, localExecData);
 
     // Clean response
     responseText = cleanAllTags(responseText);
@@ -206,6 +216,7 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
     let ghIssuesResult = null;
     let processResult = null;
     let webAgentResult = null;
+    let localExecResult = null;
 
     // Process booking
     if (bookingData && bookingData.guestName && bookingData.checkIn && bookingData.checkOut) {
@@ -331,6 +342,23 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
         }
     }
 
+    // Process Local Exec action — queues command for local PC agent
+    if (localExecData && localExecData.command) {
+        try {
+            const LocalExecCommand = mongoose.model('LocalExecCommand');
+            const doc = await LocalExecCommand.create({
+                command: localExecData.command,
+                label: localExecData.label || '',
+                cwd: localExecData.cwd || ''
+            });
+            localExecResult = { success: true, id: doc._id, command: doc.command, label: doc.label, status: 'pending' };
+            console.log('[Orchestrator] LocalExec queued:', doc.command, '→ id', doc._id);
+        } catch (err) {
+            console.error('[Orchestrator] LocalExec error:', err.message);
+            localExecResult = { success: false, error: err.message };
+        }
+    }
+
     // Process Web Agent action
     if (webAgentData) {
         try {
@@ -362,7 +390,8 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
         coding: codingResult,
         ghIssues: ghIssuesResult,
         process: processResult,
-        webAgent: webAgentResult
+        webAgent: webAgentResult,
+        localExec: localExecResult
     };
 }
 
