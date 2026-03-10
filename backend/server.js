@@ -177,6 +177,43 @@ const LocalExecCommandSchema = new mongoose.Schema({
 });
 const LocalExecCommand = mongoose.model('LocalExecCommand', LocalExecCommandSchema);
 
+const CodingSessionSchema = new mongoose.Schema({
+  task: { type: String, required: true },
+  projectPath: { type: String, required: true },
+  projectName: { type: String, default: '' },
+  status: { type: String, enum: ['running', 'done', 'error'], default: 'running' },
+  steps: [{
+    step: Number,
+    type: { type: String, enum: ['think', 'act', 'observe'] },
+    tool: String,
+    args: mongoose.Schema.Types.Mixed,
+    result: String,
+    timestamp: { type: Date, default: Date.now }
+  }],
+  summary: { type: String, default: '' },
+  filesChanged: [String],
+  createdAt: { type: Date, default: Date.now },
+  completedAt: { type: Date, default: null }
+});
+const CodingSession = mongoose.model('CodingSession', CodingSessionSchema);
+
+const ProjectMemorySchema = new mongoose.Schema({
+  projectPath: { type: String, required: true, unique: true },
+  projectName: { type: String, default: '' },
+  techStack: { type: String, default: '' },
+  structure: { type: String, default: '' },
+  conventions: { type: String, default: '' },
+  recentChanges: [{
+    date: { type: Date, default: Date.now },
+    summary: String,
+    files: [String]
+  }],
+  knownIssues: [String],
+  deployNotes: { type: String, default: '' },
+  updatedAt: { type: Date, default: Date.now }
+});
+const ProjectMemory = mongoose.model('ProjectMemory', ProjectMemorySchema);
+
 const WebAgentSessionSchema = new mongoose.Schema({
   task: { type: String, required: true },
   status: { type: String, enum: ['running', 'completed', 'failed'], default: 'running' },
@@ -2057,6 +2094,114 @@ app.get('/api/local-exec/:id', async (req, res) => {
     const doc = await LocalExecCommand.findById(req.params.id);
     if (!doc) return res.status(404).json({ error: 'Not found' });
     res.json(doc);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===================== CODING AGENT ROUTES =====================
+
+const codingLoopService = require('./codingLoopService');
+
+// Start a coding session
+app.post('/api/coding/start', async (req, res) => {
+  try {
+    const { task, projectPath, projectName } = req.body;
+    if (!task || !projectPath) return res.status(400).json({ error: 'task and projectPath are required' });
+    const session = await CodingSession.create({
+      task,
+      projectPath,
+      projectName: projectName || projectPath.split(/[/\\]/).pop()
+    });
+    // Run loop in background
+    codingLoopService.runCodingLoop(task, projectPath, session._id.toString()).catch(err => {
+      console.error('[CodingLoop] Fatal error:', err.message);
+    });
+    res.status(201).json(session);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// List coding sessions
+app.get('/api/coding/sessions', async (req, res) => {
+  try {
+    const sessions = await CodingSession.find().sort({ createdAt: -1 }).limit(20).select('-steps');
+    res.json(sessions);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get single coding session with steps
+app.get('/api/coding/sessions/:id', async (req, res) => {
+  try {
+    const session = await CodingSession.findById(req.params.id);
+    if (!session) return res.status(404).json({ error: 'Not found' });
+    res.json(session);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// SSE stream for live session updates
+app.get('/api/coding/sessions/:id/stream', async (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+
+  let lastStepCount = 0;
+  const interval = setInterval(async () => {
+    try {
+      const session = await CodingSession.findById(req.params.id);
+      if (!session) { clearInterval(interval); res.end(); return; }
+      if (session.steps.length > lastStepCount) {
+        const newSteps = session.steps.slice(lastStepCount);
+        for (const step of newSteps) {
+          res.write(`data: ${JSON.stringify(step)}\n\n`);
+        }
+        lastStepCount = session.steps.length;
+      }
+      if (session.status !== 'running') {
+        res.write(`data: ${JSON.stringify({ type: 'done', status: session.status, summary: session.summary })}\n\n`);
+        clearInterval(interval);
+        res.end();
+      }
+    } catch { clearInterval(interval); res.end(); }
+  }, 2000);
+
+  req.on('close', () => clearInterval(interval));
+});
+
+// Get project memory
+app.get('/api/coding/memory/:project', async (req, res) => {
+  try {
+    const mem = await ProjectMemory.findOne({ projectName: req.params.project });
+    res.json(mem || {});
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update project memory
+app.post('/api/coding/memory/:project', async (req, res) => {
+  try {
+    const mem = await ProjectMemory.findOneAndUpdate(
+      { projectName: req.params.project },
+      { ...req.body, updatedAt: Date.now() },
+      { new: true, upsert: true }
+    );
+    res.json(mem);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// List projects (from local PC via filesystem)
+app.get('/api/coding/projects', async (req, res) => {
+  try {
+    const memories = await ProjectMemory.find().select('projectName projectPath techStack updatedAt');
+    res.json(memories);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -48,10 +48,17 @@ Pentru GITHUB (operații GitHub — issues, PRs, CI status):
 Pentru ESCALARE (când detectezi frustrare sau situație complexă):
 <ESCALATE_JSON>{"reason":"Motivul escaladării","priority":"high"}</ESCALATE_JSON>
 
-Pentru CODING (task-uri de cod — analiză, fix, review PR):
+Pentru CODING simplu (analiză rapidă, review PR — 1 pas):
 <CODING_JSON>{"action":"analyze","files":["backend/server.js"],"question":"Ce face acest fișier?"}</CODING_JSON>
-<CODING_JSON>{"action":"execute","task":"Adaugă error handling","targetFiles":["backend/server.js"]}</CODING_JSON>
 <CODING_JSON>{"action":"review_pr","owner":"eneflorian1","repo":"usa-app","pr":1}</CODING_JSON>
+
+Pentru CODING COMPLEX (implementare feature, fix bug, refactor — multi-pas autonom pe PC-ul local):
+<CODING_LOOP_JSON>{"task":"Adaugă dark mode toggle în Navigation","project":"usa-app"}</CODING_LOOP_JSON>
+<CODING_LOOP_JSON>{"task":"Fix bug-ul de login","project":"de-vanzare.ro"}</CODING_LOOP_JSON>
+<CODING_LOOP_JSON>{"task":"Refactorizează API routes","project":"casa"}</CODING_LOOP_JSON>
+- Folosește CODING_LOOP_JSON când: implementare feature, fix bug complex, refactor, orice necesită citire+scriere cod
+- project = numele folderului din C:\\Users\\Admin\\Documents\\GitHub\\
+- Agentul va citi codul, va face modificări, va testa, va commit și push AUTOMAT
 
 Pentru GH-ISSUES (auto-fix issues de pe GitHub):
 <GH_ISSUES_JSON>{"action":"analyze","owner":"eneflorian1","repo":"usa-app","issue":1}</GH_ISSUES_JSON>
@@ -179,13 +186,15 @@ function cleanAllTags(text) {
         .replace(/<LOCAL_EXEC_JSON>[\s\S]*?<\/LOCAL_EXEC_JSON>/g, '')
         .replace(/<SCREENSHOT_JSON>[\s\S]*?<\/SCREENSHOT_JSON>/g, '')
         .replace(/<CLIPBOARD_JSON>[\s\S]*?<\/CLIPBOARD_JSON>/g, '')
+        .replace(/<CODING_LOOP_JSON>[\s\S]*?<\/CODING_LOOP_JSON>/g, '')
         .replace(/<FILESYSTEM_JSON>[\s\S]*?<\/FILESYSTEM_JSON>/g, '')
         .replace(/<SYSINFO_JSON>[\s\S]*?<\/SYSINFO_JSON>/g, '')
         .replace(/<LAUNCHER_JSON>[\s\S]*?<\/LAUNCHER_JSON>/g, '')
         .trim();
 }
 
-function detectIntent(text, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData, localExecData, screenshotData, clipboardData, filesystemData, sysinfoData, launcherData) {
+function detectIntent(text, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData, localExecData, screenshotData, clipboardData, filesystemData, sysinfoData, launcherData, codingLoopData) {
+    if (codingLoopData) return 'coding-loop';
     if (screenshotData) return 'screenshot';
     if (clipboardData) return 'clipboard';
     if (filesystemData) return 'filesystem';
@@ -253,6 +262,7 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
     const githubData = extractJSON(responseText, 'GITHUB_JSON');
     const cronData = extractJSON(responseText, 'CRON_JSON');
     const codingData = extractJSON(responseText, 'CODING_JSON');
+    const codingLoopData = extractJSON(responseText, 'CODING_LOOP_JSON');
     const ghIssuesData = extractJSON(responseText, 'GH_ISSUES_JSON');
     const processData = extractJSON(responseText, 'PROCESS_JSON');
     const webAgentData = extractJSON(responseText, 'WEB_AGENT_JSON');
@@ -262,7 +272,7 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
     const filesystemData = extractJSON(responseText, 'FILESYSTEM_JSON');
     const sysinfoData = extractJSON(responseText, 'SYSINFO_JSON');
     const launcherData = extractJSON(responseText, 'LAUNCHER_JSON');
-    const intent = detectIntent(userMessage, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData, localExecData, screenshotData, clipboardData, filesystemData, sysinfoData, launcherData);
+    const intent = detectIntent(userMessage, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData, localExecData, screenshotData, clipboardData, filesystemData, sysinfoData, launcherData, codingLoopData);
 
     // Clean response
     responseText = cleanAllTags(responseText);
