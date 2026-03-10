@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -l \"api/local-exec\\\\|LocalExec\" c:/Users/Admin/Documents/GitHub/usa-app/backend/*.js)",
+      "Bash(ls c:/Users/Admin/Documents/GitHub/usa-app/backend/*.js)",
+      "Bash(ls c:/Users/Admin/Documents/GitHub/usa-app/backend/*local*)",
+      "Bash(timeout 15 node local-exec-agent.js)",
+      "Bash(curl -s --max-time 10 http://155.117.45.192:5000/api/local-exec/history)",
+      "Bash(curl -s --max-time 10 https://enef.site)",
+      "Bash(curl -s --max-time 10 http://155.117.45.192:5000/api/notifications)",
+      "Bash(curl -s --max-time 10 http://155.117.45.192:5000/api/planner/events)",
+      "Bash(curl -s --max-time 10 http://155.117.45.192:5000/api/cron-jobs)",
+      "Bash(curl -s --max-time 10 http://155.117.45.192:5000/api/orchestrator/sessions)",
+      "Bash(curl -s --max-time 10 http://155.117.45.192:5000/api/planner/tasks)",
+      "Bash(curl -s --max-time 10 \"http://155.117.45.192:5000/api/bookings/2026/3\")",
+      "Bash(curl -s --max-time 10 http://155.117.45.192:5000/api/agent/chat/history)",
+      "Bash(curl -s --max-time 10 http://155.117.45.192:5000/api/orchestrator/chat/history)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(''Response:'', d.get\\(''response'',''''\\)\\); print\\(''LocalExec:'', d.get\\(''localExec'',''none''\\)\\)\")",
+      "Bash(curl -s --max-time 30 -X POST http://155.117.45.192:5000/api/orchestrator/chat -H \"Content-Type: application/json\" -d '{\"\"message\"\":\"\"Rulează pe PC-ul meu local comanda: echo test-local-exec-functioneaza\"\"}')",
+      "Bash(curl -s --max-time 10 http://155.117.45.192:5000/api/local-exec/pending)",
+      "Bash(curl -s --max-time 30 -X POST http://155.117.45.192:5000/api/orchestrator/chat -H \"Content-Type: application/json\" -d '{\"\"message\"\":\"\"Deschide VS Code pe PC: code .\"\"}')"
+    ]
+  }
+}
