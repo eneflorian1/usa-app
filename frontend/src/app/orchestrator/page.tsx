@@ -226,7 +226,7 @@ export default function OrchestratorPage() {
         }
     };
 
-    const isStatusMsg = (c: string) => c.startsWith('✅') || c.startsWith('❌') || c.startsWith('⏳') || c.startsWith('⚡');
+    const isStatusMsg = (c: string) => c && (c.startsWith('✅') || c.startsWith('❌') || c.startsWith('⏳') || c.startsWith('⚡'));
 
     const isSessionActive = sessionState === 'ready';
     const isConnecting = sessionState === 'connecting' || sessionState === 'settingUp';

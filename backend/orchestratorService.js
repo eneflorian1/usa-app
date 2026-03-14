@@ -7,6 +7,7 @@ const { executeGhIssuesAction } = require('./ghIssuesService');
 const { executeProcessAction } = require('./processManagerService');
 const { executeWebAgentAction } = require('./webAgentService');
 const { executeEmailAction } = require('./emailService');
+const linkProcessor = require('./linkProcessorService');
 const os = require('os');
 
 /**
@@ -98,6 +99,15 @@ Pentru EMAIL (trimitere, citire emailuri, management inbox-uri via AgentMail):
 <EMAIL_JSON>{"action":"read_message","inboxId":"...","messageId":"..."}</EMAIL_JSON>
 - Folosește pentru: trimite email, citește email, crează inbox, "ce emailuri am", "trimite un email lui X"
 
+Pentru LINK PROCESSOR (analizează un link/URL și creează un rezumat de produs/serviciu pentru negociere):
+<LINK_PROCESSOR_JSON>{"url":"https://example.com/product"}</LINK_PROCESSOR_JSON>
+<LINK_PROCESSOR_JSON>{"url":"https://olx.ro/...","email":"vanzator@mail.com","negotiate":true}</LINK_PROCESSOR_JSON>
+- Folosește când utilizatorul partajează un link/URL
+- Dacă utilizatorul dă și o adresă de email + vrea negociere → adaugă "email" și "negotiate":true
+- Cu negotiate:true, agentul VA TRIMITE AUTOMAT primul email de negociere și va porni auto-reply
+- Exemple: "analizează linkul", "negociază produsul de pe link cu email@x.com", "procesează URL-ul"
+- IMPORTANT: Dacă utilizatorul menționează un email + un link + negociere → OBLIGATORIU pune negotiate:true și email
+
 Pentru SCREENSHOT (captură ecran de pe PC-ul local):
 <SCREENSHOT_JSON>{"area":"full"}</SCREENSHOT_JSON>
 - Folosește pentru: screenshot, captură ecran, "ce am pe ecran", "arată-mi ecranul", print screen
@@ -164,6 +174,7 @@ COMPORTAMENT:
 - Exemple comandă simplă: "dir Desktop", "deschide VS Code" → LOCAL_EXEC_JSON
 - Orice referire la "pe PC", "pe local", "pe computer" cu task simplu → LOCAL_EXEC_JSON
 - Orice referire la "instalează", "configurează", "verifică și repară" → TERMINAL_TASK_JSON
+- Dacă utilizatorul trimite un LINK/URL → LINK_PROCESSOR_JSON (analizează produs/serviciu)
 - NU răspunde doar cu text despre intenție — TREBUIE să incluzi tag-ul corespunzător
 - Include TOOL JSON doar când ai TOATE datele necesare
 - NU inventa informații
@@ -357,10 +368,12 @@ function cleanAllTags(text) {
         .replace(/<LAUNCHER_JSON>[\s\S]*?<\/LAUNCHER_JSON>/g, '')
         .replace(/<TERMINAL_TASK_JSON>[\s\S]*?<\/TERMINAL_TASK_JSON>/g, '')
         .replace(/<EMAIL_JSON>[\s\S]*?<\/EMAIL_JSON>/g, '')
+        .replace(/<LINK_PROCESSOR_JSON>[\s\S]*?<\/LINK_PROCESSOR_JSON>/g, '')
         .trim();
 }
 
-function detectIntent(text, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData, localExecData, screenshotData, clipboardData, filesystemData, sysinfoData, launcherData, codingLoopData, terminalTaskData, emailData) {
+function detectIntent(text, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData, localExecData, screenshotData, clipboardData, filesystemData, sysinfoData, launcherData, codingLoopData, terminalTaskData, emailData, linkProcessorData) {
+    if (linkProcessorData) return 'link-processor';
     if (emailData) return 'email';
     if (terminalTaskData) return 'terminal-task';
     if (codingLoopData) return 'coding-loop';
@@ -387,6 +400,7 @@ function detectIntent(text, bookingData, taskData, escalateData, githubData, cro
     if (/deschide.*folder|deschide.*notepad|deschide.*chrome|deschide.*url|deschide.*aplicați|open.*folder/.test(lower)) return 'launcher';
     if (/mergi pe|deschide site|navigheaz|comand[aă].*pe|caut[aă].*pe.*web|completea.*formular|browser|web.*agent|automat.*web|wolt|uber.*eats|booking\.com|ryanair|emag|amazon/.test(lower)) return 'web-agent';
     if (/\bemail\b|\bmail\b|trimite.*email|citește.*email|inbox|mesaj.*email|send.*email|compose.*email|check.*mail/i.test(lower)) return 'email';
+    if (/https?:\/\/[^\s]+.*(?:produs|product|anunț|olx|emag|amazon|ebay|negoci|preț|ofert|link|url)/i.test(lower) || /analizea.*link|procesea.*link|uită-te.*la.*link|verifică.*link|ce.*(?:e|este|găsesc).*la.*link/i.test(lower)) return 'link-processor';
     if (/instale[aă]z[aă]|configurea|setup.*environment|verifică.*și.*repar|install.*pachet|npm.*install.*-g|verific[aă].*versiune|ce versiune|versiunea de|node.*version|npm.*version|python.*version|update[aă]z[aă].*pachet|dezinstale[aă]z[aă]|uninstall/i.test(lower)) return 'terminal-task';
     if (/execut[aă].*local|rulea.*pe pc|comand[aă].*local|local.*exec|pe pc|pe local|pe computer|deschide.*pe.*pc|rulează.*local/.test(lower)) return 'local-exec';
     if (/(?<!\bvs\s)\bcod(?!e[\s.])|fix\b|bug|refactor|review.*pr|analize.*cod|implementea|debug/.test(lower)) return 'coding';
@@ -414,10 +428,23 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
 
     // 2. Build history for Gemini (same as agentChatService)
     const recentMessages = chat.messages.slice(-20);
-    const history = recentMessages.map(msg => ({
+    let history = recentMessages.map(msg => ({
         role: msg.role === 'user' ? 'user' : 'model',
-        parts: [{ text: msg.content }]
+        parts: [{ text: msg.content || ' ' }]
     }));
+    // Gemini requires first message to be 'user' — drop leading 'model' entries
+    while (history.length > 0 && history[0].role !== 'user') {
+        history.shift();
+    }
+    // Gemini also requires alternating user/model — merge consecutive same-role
+    history = history.reduce((acc, curr) => {
+        if (acc.length > 0 && acc[acc.length - 1].role === curr.role) {
+            acc[acc.length - 1].parts[0].text += '\n' + curr.parts[0].text;
+        } else {
+            acc.push(curr);
+        }
+        return acc;
+    }, []);
 
     // 3. Single Gemini call (same pattern as working agentChatService)
     const model = await getGeminiModel();
@@ -445,7 +472,8 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
     const launcherData = extractJSON(responseText, 'LAUNCHER_JSON');
     const terminalTaskData = extractJSON(responseText, 'TERMINAL_TASK_JSON');
     const emailData = extractJSON(responseText, 'EMAIL_JSON');
-    const intent = detectIntent(userMessage, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData, localExecData, screenshotData, clipboardData, filesystemData, sysinfoData, launcherData, codingLoopData, terminalTaskData, emailData);
+    const linkProcessorData = extractJSON(responseText, 'LINK_PROCESSOR_JSON');
+    const intent = detectIntent(userMessage, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData, localExecData, screenshotData, clipboardData, filesystemData, sysinfoData, launcherData, codingLoopData, terminalTaskData, emailData, linkProcessorData);
 
     // Clean response
     responseText = cleanAllTags(responseText);
@@ -463,6 +491,7 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
     let localExecResult = null;
     let terminalTaskResult = null;
     let emailResult = null;
+    let linkProcessorResult = null;
 
     // Process booking
     if (bookingData && bookingData.guestName && bookingData.checkIn && bookingData.checkOut) {
@@ -764,6 +793,98 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
         }
     }
 
+    // Process Link Processor — scrape URL, generate product resume, save to DB
+    // If negotiate:true + email → auto-send first negotiation email + start agent
+    if (linkProcessorData && linkProcessorData.url) {
+        try {
+            // Auto-detect email + negotiate intent from user message if Gemini forgot to include them
+            let negotiateEmail = linkProcessorData.email;
+            let shouldNegotiate = linkProcessorData.negotiate;
+            if (!negotiateEmail) {
+                const emailMatch = userMessage.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+                if (emailMatch) negotiateEmail = emailMatch[0];
+            }
+            if (!shouldNegotiate && negotiateEmail) {
+                // If user provided email + link, they almost certainly want negotiation
+                shouldNegotiate = true;
+            }
+
+            if (shouldNegotiate && negotiateEmail) {
+                // Full autonomous negotiation flow
+                linkProcessorResult = await linkProcessor.startNegotiation(
+                    linkProcessorData.url,
+                    negotiateEmail,
+                    { inboxId: linkProcessorData.inboxId || null }
+                );
+                const r = linkProcessorResult.resume;
+                responseText = `🤝 **Negociere Pornită Automat!**\n\n` +
+                    `📦 **${r.title}** (${r.type})\n` +
+                    (r.price ? `💰 Preț: ${r.price} ${r.currency || ''}\n` : '') +
+                    (r.seller ? `🏪 Vânzător: ${r.seller}\n` : '') +
+                    `\n✉️ **Primul email de negociere trimis la:** ${negotiateEmail}\n` +
+                    `📧 Subiect: ${linkProcessorResult.subject}\n\n` +
+                    `📝 **Mesajul trimis:**\n> ${linkProcessorResult.body.split('\n').join('\n> ')}\n\n` +
+                    `🤖 **Email agent pornit** — va răspunde automat la replies.\n` +
+                    `👁️ Urmărește conversația în tab-ul Agent pe pagina Email.`;
+                console.log('[Orchestrator] Negotiation started:', r.title, '→', negotiateEmail);
+            } else {
+                // Just analyze the link
+                linkProcessorResult = await linkProcessor.processLink(linkProcessorData.url, {
+                    inboxId: linkProcessorData.inboxId || null,
+                    force: linkProcessorData.force || false
+                });
+                const r = linkProcessorResult.resume;
+                responseText = `📦 **Rezumat Produs/Serviciu Salvat**\n\n` +
+                    `**${r.title}** (${r.type})\n` +
+                    (r.price ? `💰 Preț: ${r.price} ${r.currency || ''}\n` : '') +
+                    (r.seller ? `🏪 Vânzător: ${r.seller}\n` : '') +
+                    (r.description ? `📝 ${r.description}\n` : '') +
+                    (r.keyFeatures?.length ? `\n✅ Caracteristici:\n${r.keyFeatures.map(f => `  • ${f}`).join('\n')}\n` : '') +
+                    (r.negotiationNotes ? `\n💡 **Sfaturi negociere:** ${r.negotiationNotes}\n` : '') +
+                    (r.location ? `📍 Locație: ${r.location}\n` : '') +
+                    `\n🔗 ${r.url}` +
+                    (linkProcessorResult.isNew ? '' : '\n\n_(rezumat actualizat)_');
+                console.log('[Orchestrator] LinkProcessor saved:', r.title, '→', r.url);
+            }
+        } catch (err) {
+            console.error('[Orchestrator] LinkProcessor error:', err.message);
+            linkProcessorResult = { error: err.message };
+            responseText = `❌ Nu am putut procesa linkul: ${err.message}`;
+        }
+    }
+
+    // Fallback: intent is link-processor but Gemini didn't generate the tag — extract URL from message
+    if (intent === 'link-processor' && !linkProcessorResult) {
+        const urlMatch = userMessage.match(/https?:\/\/[^\s]+/);
+        const emailMatch = userMessage.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+        if (urlMatch) {
+            try {
+                if (emailMatch && /negoci|cump[aă]r|ofert|pre[tț]/i.test(userMessage)) {
+                    // Auto-negotiate
+                    linkProcessorResult = await linkProcessor.startNegotiation(urlMatch[0], emailMatch[0]);
+                    const r = linkProcessorResult.resume;
+                    responseText = `🤝 **Negociere Pornită Automat!**\n\n` +
+                        `📦 **${r.title}**\n` +
+                        `✉️ Primul email trimis la: ${emailMatch[0]}\n` +
+                        `🤖 Agent auto-reply pornit.`;
+                } else {
+                    linkProcessorResult = await linkProcessor.processLink(urlMatch[0]);
+                    const r = linkProcessorResult.resume;
+                    responseText = `📦 **Rezumat Produs/Serviciu Salvat**\n\n` +
+                        `**${r.title}** (${r.type})\n` +
+                        (r.price ? `💰 Preț: ${r.price} ${r.currency || ''}\n` : '') +
+                        (r.seller ? `🏪 Vânzător: ${r.seller}\n` : '') +
+                        (r.description ? `📝 ${r.description}\n` : '') +
+                        (r.negotiationNotes ? `\n💡 **Sfaturi negociere:** ${r.negotiationNotes}` : '') +
+                        `\n\n🔗 ${r.url}`;
+                }
+                console.log('[Orchestrator] LinkProcessor fallback saved:', linkProcessorResult.resume?.title);
+            } catch (err) {
+                console.error('[Orchestrator] LinkProcessor fallback error:', err.message);
+            }
+        }
+    }
+
     // Process Web Agent action
     if (webAgentData) {
         try {
@@ -839,7 +960,8 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
         webAgent: webAgentResult,
         localExec: localExecResult,
         terminalTask: terminalTaskResult,
-        email: emailResult
+        email: emailResult,
+        linkProcessor: linkProcessorResult
     };
 }
 

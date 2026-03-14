@@ -1,4 +1,4 @@
-const { AgentMail } = require('agentmail');
+const { AgentMailClient } = require('agentmail');
 const mongoose = require('mongoose');
 
 /**
@@ -15,7 +15,7 @@ async function getClient() {
     if (!setting || !setting.value) {
         throw new Error('AgentMail API key not configured. Get one at https://console.agentmail.to/ and set it in Settings.');
     }
-    client = new AgentMail({ apiKey: setting.value });
+    client = new AgentMailClient({ apiKey: setting.value });
     return client;
 }
 
@@ -71,19 +71,39 @@ async function deleteInbox(inboxId) {
     return { success: true };
 }
 
+async function updateInbox(inboxId, updates = {}) {
+    const am = await getClient();
+    const inbox = await am.inboxes.update(inboxId, {
+        displayName: updates.displayName || undefined
+    });
+    console.log('[Email] Inbox updated:', inboxId, 'displayName:', updates.displayName);
+    return {
+        inboxId: inbox.inboxId,
+        email: inbox.email,
+        displayName: inbox.displayName || '',
+    };
+}
+
 // ── Message Operations ───────────────────────────────────────────────────────
 
-async function sendEmail(inboxId, { to, subject, text, html, cc, bcc, replyTo }) {
+async function sendEmail(inboxId, { to, subject, text, html, cc, bcc, replyTo, inReplyTo, references, fromName }) {
     const am = await getClient();
-    const msg = await am.inboxes.messages.send(inboxId, {
+    const sendPayload = {
         to,
         subject: subject || '(no subject)',
         text: text || '',
         html: html || undefined,
         cc: cc || undefined,
         bcc: bcc || undefined,
-        replyTo: replyTo || undefined,
-    });
+    };
+    // replyTo = email address for Reply-To header (where replies go)
+    if (replyTo) sendPayload.replyTo = replyTo;
+    // inReplyTo = messageId for In-Reply-To header (thread linking)
+    if (inReplyTo) sendPayload.inReplyTo = inReplyTo;
+    if (references) sendPayload.references = references;
+    // Try to set fromName if supported
+    if (fromName) sendPayload.fromName = fromName;
+    const msg = await am.inboxes.messages.send(inboxId, sendPayload);
     console.log('[Email] Sent:', subject, '→', to);
     return {
         messageId: msg.messageId || msg.id,
@@ -105,7 +125,7 @@ async function listMessages(inboxId, options = {}) {
             from: m.from,
             to: m.to,
             subject: m.subject || '(no subject)',
-            text: m.extractedText || m.text || '',
+            text: m.extractedText || m.text || m.body || '',
             html: m.extractedHtml || m.html || '',
             date: m.date || m.createdAt,
             labels: m.labels || [],
@@ -124,7 +144,7 @@ async function getMessage(inboxId, messageId) {
         cc: m.cc,
         bcc: m.bcc,
         subject: m.subject || '(no subject)',
-        text: m.extractedText || m.text || '',
+        text: m.extractedText || m.text || m.body || '',
         html: m.extractedHtml || m.html || '',
         date: m.date || m.createdAt,
         labels: m.labels || [],
@@ -168,6 +188,7 @@ module.exports = {
     listInboxes,
     getInbox,
     deleteInbox,
+    updateInbox,
     sendEmail,
     listMessages,
     getMessage,

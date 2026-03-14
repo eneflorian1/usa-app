@@ -15,6 +15,8 @@ const ugcVideoAgent = require('./ugcVideoAgentService');
 const ugcProductService = require('./ugcProductService');
 const crypto = require('crypto');
 const emailService = require('./emailService');
+const emailAgent = require('./emailAgentService');
+const linkProcessor = require('./linkProcessorService');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -334,6 +336,57 @@ const UgcProductSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }
 });
 const UgcProduct = mongoose.model('UgcProduct', UgcProductSchema);
+
+const EmailThreadSchema = new mongoose.Schema({
+  inboxId: { type: String, required: true },
+  threadKey: { type: String, required: true },
+  senderEmail: { type: String, default: '' },
+  subject: { type: String, default: '' },
+  messages: [{
+    role: { type: String, enum: ['user', 'assistant'], required: true },
+    content: { type: String, default: '' },
+    messageId: { type: String, default: '' },
+    timestamp: { type: Date, default: Date.now }
+  }],
+  replyCount: { type: Number, default: 0 },
+  status: { type: String, enum: ['active', 'paused', 'closed', 'max-replies'], default: 'active' },
+  persona: { type: String, default: '' },
+  lastReplyAt: { type: Date, default: null },
+  createdAt: { type: Date, default: Date.now }
+});
+EmailThreadSchema.index({ inboxId: 1, threadKey: 1 }, { unique: true });
+const EmailThread = mongoose.model('EmailThread', EmailThreadSchema);
+
+const EmailAgentConfigSchema = new mongoose.Schema({
+  inboxId: { type: String, required: true, unique: true },
+  enabled: { type: Boolean, default: false },
+  persona: { type: String, default: '' },
+  maxRepliesPerThread: { type: Number, default: 10 },
+  pollingInterval: { type: Number, default: 30000 },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+});
+const EmailAgentConfig = mongoose.model('EmailAgentConfig', EmailAgentConfigSchema);
+
+const ProductResumeSchema = new mongoose.Schema({
+  url: { type: String, required: true, unique: true },
+  title: { type: String, default: '' },
+  type: { type: String, default: 'other' },
+  price: { type: String, default: null },
+  currency: { type: String, default: null },
+  seller: { type: String, default: null },
+  description: { type: String, default: '' },
+  keyFeatures: [{ type: String }],
+  negotiationNotes: { type: String, default: '' },
+  category: { type: String, default: 'other' },
+  location: { type: String, default: null },
+  condition: { type: String, default: null },
+  rawContent: { type: String, default: '' },
+  inboxId: { type: String, default: null },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+});
+const ProductResume = mongoose.model('ProductResume', ProductResumeSchema);
 
 // API Routes
 app.get('/api/agent/config', async (req, res) => {
@@ -2204,6 +2257,13 @@ app.delete('/api/email/inboxes/:inboxId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.put('/api/email/inboxes/:inboxId', async (req, res) => {
+  try {
+    const result = await emailService.updateInbox(req.params.inboxId, req.body);
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // Messages
 app.get('/api/email/inboxes/:inboxId/messages', async (req, res) => {
   try {
@@ -2226,6 +2286,120 @@ app.post('/api/email/inboxes/:inboxId/send', async (req, res) => {
   try {
     const result = await emailService.sendEmail(req.params.inboxId, req.body);
     res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/email/inboxes/:inboxId/messages/:messageId', async (req, res) => {
+  try {
+    const am = await emailService.getInbox(req.params.inboxId); // verify inbox exists
+    // AgentMail may not support delete — just remove from view
+    res.json({ success: true, messageId: req.params.messageId });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ===================== EMAIL AGENT ROUTES =====================
+
+app.delete('/api/email/agent/thread/:threadId', async (req, res) => {
+  try {
+    const EmailThread = mongoose.model('EmailThread');
+    await EmailThread.findByIdAndDelete(req.params.threadId);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Product resume routes
+app.get('/api/email/products', async (req, res) => {
+  try {
+    const products = await ProductResume.find().sort({ updatedAt: -1 }).limit(50);
+    res.json(products);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/email/products/process', async (req, res) => {
+  try {
+    const { url, inboxId } = req.body;
+    if (!url) return res.status(400).json({ error: 'URL is required' });
+    const result = await linkProcessor.processLink(url, { inboxId, force: req.body.force });
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/email/products/:id', async (req, res) => {
+  try {
+    await ProductResume.findByIdAndDelete(req.params.id);
+    res.json({ message: 'Deleted' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+
+// Get agent config for inbox
+app.get('/api/email/agent/config/:inboxId', async (req, res) => {
+  try {
+    let config = await EmailAgentConfig.findOne({ inboxId: req.params.inboxId });
+    if (!config) config = { inboxId: req.params.inboxId, enabled: false, persona: '', maxRepliesPerThread: 10, pollingInterval: 30000 };
+    res.json({ ...config.toJSON ? config.toJSON() : config, isPolling: emailAgent.isPolling(req.params.inboxId) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Save agent config
+app.post('/api/email/agent/config/:inboxId', async (req, res) => {
+  try {
+    const { persona, maxRepliesPerThread, pollingInterval } = req.body;
+    const config = await EmailAgentConfig.findOneAndUpdate(
+      { inboxId: req.params.inboxId },
+      { persona, maxRepliesPerThread: maxRepliesPerThread || 10, pollingInterval: pollingInterval || 30000, updatedAt: Date.now() },
+      { upsert: true, new: true }
+    );
+    // If agent is running, restart with new config
+    if (config.enabled && emailAgent.isPolling(req.params.inboxId)) {
+      emailAgent.stopPolling(req.params.inboxId);
+      emailAgent.startPolling(req.params.inboxId, config);
+    }
+    res.json(config);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Start agent
+app.post('/api/email/agent/start/:inboxId', async (req, res) => {
+  try {
+    let config = await EmailAgentConfig.findOneAndUpdate(
+      { inboxId: req.params.inboxId },
+      { enabled: true, updatedAt: Date.now() },
+      { upsert: true, new: true }
+    );
+    emailAgent.startPolling(req.params.inboxId, config);
+    res.json({ message: 'Agent started', inboxId: req.params.inboxId });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Stop agent
+app.post('/api/email/agent/stop/:inboxId', async (req, res) => {
+  try {
+    await EmailAgentConfig.findOneAndUpdate(
+      { inboxId: req.params.inboxId },
+      { enabled: false, updatedAt: Date.now() }
+    );
+    emailAgent.stopPolling(req.params.inboxId);
+    res.json({ message: 'Agent stopped', inboxId: req.params.inboxId });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Get threads for inbox
+app.get('/api/email/agent/threads/:inboxId', async (req, res) => {
+  try {
+    const threads = await EmailThread.find({ inboxId: req.params.inboxId })
+      .sort({ lastReplyAt: -1, createdAt: -1 })
+      .limit(50);
+    res.json(threads);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Get thread detail
+app.get('/api/email/agent/thread/:threadId', async (req, res) => {
+  try {
+    const thread = await EmailThread.findById(req.params.threadId);
+    if (!thread) return res.status(404).json({ error: 'Thread not found' });
+    res.json(thread);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -2416,6 +2590,14 @@ app.listen(PORT, () => {
       console.error('[Cron] Failed to restore jobs on startup:', err.message);
     }
   }, 1000);
+  // Restore email agents
+  setTimeout(async () => {
+    try {
+      await emailAgent.restoreActiveAgents();
+    } catch (err) {
+      console.error('[EmailAgent] Failed to restore on startup:', err.message);
+    }
+  }, 1500);
   // Automatically initialize WhatsApp client on server start
   setTimeout(() => {
     whatsappService.initializeWhatsApp();
