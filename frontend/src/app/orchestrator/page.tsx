@@ -21,7 +21,6 @@ interface OrchestratorResponse {
     tasks: Array<{ _id: string; title: string; priority: string; dueDate: string }> | null;
     localExec: { success: boolean; id?: string; command?: string; label?: string; status?: string; type?: string; error?: string } | null;
     coding: { success: boolean; sessionId?: string; status?: string; message?: string; error?: string } | null;
-    terminalTask: { success: boolean; status?: string; task?: string; report?: string; error?: string } | null;
 }
 
 const agentLabels: Record<string, { label: string; color: string; icon: string }> = {
@@ -174,7 +173,7 @@ export default function OrchestratorPage() {
                     setMessages(prev => [...prev, {
                         role: 'model',
                         agent: data.agent || 'local-exec',
-                        content: `❌ LOCAL EXEC FAILED\n${data.localExec?.error || 'Unknown error'}`
+                        content: `❌ LOCAL EXEC FAILED\n${data.localExec.error || 'Unknown error'}`
                     }]);
                 }
             }
@@ -191,24 +190,7 @@ export default function OrchestratorPage() {
                     setMessages(prev => [...prev, {
                         role: 'model',
                         agent: 'coding',
-                        content: `❌ CODING ERROR\n${data.coding?.error}`
-                    }]);
-                }
-            }
-
-            // Handle terminal task results
-            if (data.terminalTask) {
-                if (data.terminalTask.success && data.terminalTask.status === 'running') {
-                    setMessages(prev => [...prev, {
-                        role: 'model',
-                        agent: 'terminal-task',
-                        content: `⚡ Terminal Task started: ${data.terminalTask.task}\n🔄 Running in background — result will appear when done.`
-                    }]);
-                } else if (!data.terminalTask.success) {
-                    setMessages(prev => [...prev, {
-                        role: 'model',
-                        agent: 'terminal-task',
-                        content: `❌ TERMINAL TASK ERROR\n${data.terminalTask?.error || 'Unknown error'}`
+                        content: `❌ CODING ERROR\n${data.coding.error}`
                     }]);
                 }
             }
@@ -243,7 +225,7 @@ export default function OrchestratorPage() {
         }
     };
 
-    const isStatusMsg = (c: string) => c?.startsWith('✅') || c?.startsWith('❌') || c?.startsWith('⏳') || c?.startsWith('⚡');
+    const isStatusMsg = (c: string) => c.startsWith('✅') || c.startsWith('❌') || c.startsWith('⏳') || c.startsWith('⚡');
 
     const isSessionActive = sessionState === 'ready';
     const isConnecting = sessionState === 'connecting' || sessionState === 'settingUp';
