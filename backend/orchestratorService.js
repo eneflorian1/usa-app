@@ -667,18 +667,28 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
         }
     }
 
-    // Process Terminal Task — autonomous ReAct loop
+    // Process Terminal Task — autonomous ReAct loop (runs in background, doesn't block HTTP)
     if (terminalTaskData && terminalTaskData.task) {
-        try {
-            console.log('[Orchestrator] TerminalTask starting:', terminalTaskData.task);
-            const report = await executeTerminalTask(terminalTaskData.task, sessionId);
-            terminalTaskResult = { success: true, report };
-            responseText = report;
-            console.log('[Orchestrator] TerminalTask done:', report.substring(0, 200));
-        } catch (err) {
-            console.error('[Orchestrator] TerminalTask error:', err.message);
-            terminalTaskResult = { success: false, error: err.message };
-        }
+        console.log('[Orchestrator] TerminalTask starting (background):', terminalTaskData.task);
+        const taskSessionId = sessionId;
+        // Run in background (don't await) — same pattern as coding loop
+        executeTerminalTask(terminalTaskData.task, taskSessionId).then(async (report) => {
+            try {
+                const AgentChatModel = mongoose.model('AgentChat');
+                const chatDoc = await AgentChatModel.findOne({ sessionId: taskSessionId });
+                if (chatDoc) {
+                    chatDoc.messages.push({ role: 'model', content: `⚡ Terminal Task completat:\n${report}` });
+                    chatDoc.updatedAt = Date.now();
+                    await chatDoc.save();
+                }
+                console.log('[Orchestrator] TerminalTask done:', report.substring(0, 200));
+            } catch (saveErr) {
+                console.error('[Orchestrator] TerminalTask save error:', saveErr.message);
+            }
+        }).catch(err => {
+            console.error('[Orchestrator] TerminalTask fatal:', err.message);
+        });
+        terminalTaskResult = { success: true, status: 'running', task: terminalTaskData.task };
     }
 
     // Process Web Agent action
