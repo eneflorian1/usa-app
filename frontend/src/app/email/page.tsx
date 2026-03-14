@@ -1,9 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { Mail, Plus, Send, Inbox, RefreshCw, Trash2, ArrowLeft, ChevronRight, Key, AlertCircle } from 'lucide-react';
-
-const API = process.env.NEXT_PUBLIC_API || 'http://localhost:5000';
+import { Mail, Plus, Send, Inbox, RefreshCw, Trash2, ArrowLeft, ChevronRight, Key, AlertCircle, Check } from 'lucide-react';
 
 interface EmailInbox {
   inboxId: string;
@@ -23,7 +21,7 @@ interface EmailMessage {
   labels: string[];
 }
 
-type View = 'inboxes' | 'messages' | 'compose' | 'read' | 'setup';
+type View = 'inboxes' | 'messages' | 'compose' | 'read';
 
 export default function EmailPage() {
   const [view, setView] = useState<View>('inboxes');
@@ -43,6 +41,8 @@ export default function EmailPage() {
   // API key form
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [apiKeyMasked, setApiKeyMasked] = useState('');
+  const [showApiKeyForm, setShowApiKeyForm] = useState(false);
+  const [apiKeySaved, setApiKeySaved] = useState(false);
 
   // Create inbox form
   const [newInboxName, setNewInboxName] = useState('');
@@ -50,19 +50,20 @@ export default function EmailPage() {
 
   const checkApiKey = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/api/settings/agentmail`);
+      const res = await fetch('/api/settings/agentmail');
       const data = await res.json();
       setApiKeySet(!!data.apiKey);
       setApiKeyMasked(data.apiKey || '');
-      if (!data.apiKey) setView('setup');
-    } catch { setApiKeySet(false); setView('setup'); }
+      if (!data.apiKey) setShowApiKeyForm(true);
+    } catch { setApiKeySet(false); setShowApiKeyForm(true); }
   }, []);
 
   const loadInboxes = useCallback(async () => {
+    if (!apiKeySet) return;
     setLoading(true);
     setError('');
     try {
-      const res = await fetch(`${API}/api/email/inboxes`);
+      const res = await fetch('/api/email/inboxes');
       if (!res.ok) throw new Error((await res.json()).error || 'Failed to load inboxes');
       const data = await res.json();
       setInboxes(data);
@@ -70,33 +71,41 @@ export default function EmailPage() {
       const message = err instanceof Error ? err.message : 'Failed to load';
       setError(message);
     } finally { setLoading(false); }
-  }, []);
+  }, [apiKeySet]);
 
   useEffect(() => { checkApiKey(); }, [checkApiKey]);
-  useEffect(() => { if (apiKeySet && view === 'inboxes') loadInboxes(); }, [apiKeySet, view, loadInboxes]);
+  useEffect(() => { if (apiKeySet) loadInboxes(); }, [apiKeySet, loadInboxes]);
 
   const saveApiKey = async () => {
     if (!apiKeyInput.trim()) return;
     setLoading(true);
+    setError('');
     try {
-      const res = await fetch(`${API}/api/settings/agentmail`, {
+      const res = await fetch('/api/settings/agentmail', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ apiKey: apiKeyInput.trim() })
       });
-      if (!res.ok) throw new Error('Failed to save');
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Failed to save');
+      }
       setApiKeySet(true);
       setApiKeyInput('');
-      setView('inboxes');
+      setApiKeySaved(true);
+      setTimeout(() => setApiKeySaved(false), 3000);
       await checkApiKey();
-    } catch { setError('Failed to save API key'); }
-    finally { setLoading(false); }
+      await loadInboxes();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to save';
+      setError(message);
+    } finally { setLoading(false); }
   };
 
   const createInbox = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API}/api/email/inboxes`, {
+      const res = await fetch('/api/email/inboxes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ displayName: newInboxName || 'AI Agent' })
@@ -114,7 +123,7 @@ export default function EmailPage() {
   const deleteInbox = async (inboxId: string) => {
     if (!confirm('Delete this inbox permanently?')) return;
     try {
-      await fetch(`${API}/api/email/inboxes/${inboxId}`, { method: 'DELETE' });
+      await fetch(`/api/email/inboxes/${inboxId}`, { method: 'DELETE' });
       await loadInboxes();
       if (selectedInbox?.inboxId === inboxId) { setSelectedInbox(null); setView('inboxes'); }
     } catch { setError('Failed to delete inbox'); }
@@ -126,7 +135,7 @@ export default function EmailPage() {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch(`${API}/api/email/inboxes/${inbox.inboxId}/messages`);
+      const res = await fetch(`/api/email/inboxes/${inbox.inboxId}/messages`);
       if (!res.ok) throw new Error('Failed to load messages');
       const data = await res.json();
       setMessages(data.messages || []);
@@ -141,7 +150,7 @@ export default function EmailPage() {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch(`${API}/api/email/inboxes/${selectedInbox.inboxId}/send`, {
+      const res = await fetch(`/api/email/inboxes/${selectedInbox.inboxId}/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ to: composeTo, subject: composeSubject, text: composeBody })
@@ -158,15 +167,13 @@ export default function EmailPage() {
     } finally { setLoading(false); }
   };
 
-  // ── Render ────────────────────────────────────────────────────────────────
-
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-zinc-950 md:ml-64 pb-24 md:pb-8">
       {/* Header */}
       <div className="sticky top-0 z-30 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl border-b border-gray-200 dark:border-zinc-800">
         <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            {view !== 'inboxes' && view !== 'setup' && (
+            {(view === 'messages' || view === 'compose' || view === 'read') && (
               <button onClick={() => {
                 if (view === 'read') { setView('messages'); setSelectedMessage(null); }
                 else if (view === 'compose') setView('messages');
@@ -177,17 +184,16 @@ export default function EmailPage() {
             )}
             <Mail className="text-indigo-500" size={24} />
             <h1 className="text-xl font-bold">
-              {view === 'setup' ? 'Email Setup' :
-               view === 'inboxes' ? 'Email Inboxes' :
+              {view === 'inboxes' ? 'Email' :
                view === 'compose' ? 'New Email' :
-               view === 'read' ? selectedMessage?.subject || 'Email' :
-               selectedInbox?.email || 'Messages'}
+               view === 'read' ? (selectedMessage?.subject || 'Email') :
+               (selectedInbox?.displayName || selectedInbox?.email || 'Messages')}
             </h1>
           </div>
           <div className="flex gap-2">
             {view === 'inboxes' && apiKeySet && (
               <>
-                <button onClick={() => setShowCreateInbox(true)} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors text-sm font-medium">
+                <button onClick={() => setShowCreateInbox(!showCreateInbox)} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors text-sm font-medium">
                   <Plus size={16} /> New Inbox
                 </button>
                 <button onClick={loadInboxes} className="p-2 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded-xl transition-colors" title="Refresh">
@@ -200,9 +206,6 @@ export default function EmailPage() {
                 <Send size={16} /> Compose
               </button>
             )}
-            <button onClick={() => setView('setup')} className="p-2 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded-xl transition-colors" title="API Key Settings">
-              <Key size={18} />
-            </button>
           </div>
         </div>
       </div>
@@ -216,63 +219,68 @@ export default function EmailPage() {
           </div>
         )}
 
-        {/* Setup View */}
-        {view === 'setup' && (
-          <div className="bg-white dark:bg-zinc-900 rounded-2xl border border-gray-200 dark:border-zinc-800 p-8 max-w-lg mx-auto">
-            <div className="text-center mb-6">
-              <div className="w-16 h-16 bg-indigo-100 dark:bg-indigo-900/30 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                <Mail className="text-indigo-500" size={32} />
+        {/* API Key Section — always visible at top of inboxes view */}
+        {view === 'inboxes' && (
+          <div className="bg-white dark:bg-zinc-900 rounded-2xl border border-gray-200 dark:border-zinc-800 p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 bg-indigo-100 dark:bg-indigo-900/30 rounded-xl flex items-center justify-center">
+                  <Key className="text-indigo-500" size={16} />
+                </div>
+                <div>
+                  <p className="text-sm font-medium">AgentMail API Key</p>
+                  {apiKeyMasked ? (
+                    <p className="text-xs text-gray-400 font-mono">{apiKeyMasked}</p>
+                  ) : (
+                    <p className="text-xs text-gray-400">Not configured — <a href="https://console.agentmail.to/" target="_blank" rel="noopener noreferrer" className="text-indigo-500 underline">Get key</a></p>
+                  )}
+                </div>
               </div>
-              <h2 className="text-2xl font-bold mb-2">AgentMail Setup</h2>
-              <p className="text-gray-500 dark:text-gray-400 text-sm">
-                Get your API key from <a href="https://console.agentmail.to/" target="_blank" rel="noopener noreferrer" className="text-indigo-500 underline">console.agentmail.to</a>
-              </p>
-            </div>
-            {apiKeyMasked && (
-              <p className="text-sm text-gray-500 dark:text-gray-400 mb-4 p-3 bg-gray-50 dark:bg-zinc-800 rounded-xl">
-                Current key: <code className="font-mono">{apiKeyMasked}</code>
-              </p>
-            )}
-            <input
-              type="password"
-              value={apiKeyInput}
-              onChange={e => setApiKeyInput(e.target.value)}
-              placeholder="am_..."
-              className="w-full px-4 py-3 bg-gray-50 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-xl text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-            <button onClick={saveApiKey} disabled={loading || !apiKeyInput.trim()} className="w-full px-4 py-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-50 transition-colors font-medium">
-              {loading ? 'Saving...' : 'Save API Key'}
-            </button>
-            {apiKeySet && (
-              <button onClick={() => setView('inboxes')} className="w-full mt-3 px-4 py-3 bg-gray-100 dark:bg-zinc-800 rounded-xl hover:bg-gray-200 dark:hover:bg-zinc-700 transition-colors text-sm">
-                ← Back to Inboxes
+              <button onClick={() => setShowApiKeyForm(!showApiKeyForm)} className="px-3 py-1.5 text-xs bg-gray-100 dark:bg-zinc-800 rounded-lg hover:bg-gray-200 dark:hover:bg-zinc-700 transition-colors">
+                {showApiKeyForm ? 'Close' : apiKeySet ? 'Change' : 'Setup'}
               </button>
+            </div>
+            {showApiKeyForm && (
+              <div className="mt-3 flex gap-2">
+                <input
+                  type="password"
+                  value={apiKeyInput}
+                  onChange={e => setApiKeyInput(e.target.value)}
+                  placeholder="am_..."
+                  className="flex-1 px-3 py-2 bg-gray-50 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  onKeyDown={e => e.key === 'Enter' && saveApiKey()}
+                />
+                <button onClick={saveApiKey} disabled={loading || !apiKeyInput.trim()} className="px-4 py-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-50 transition-colors text-sm font-medium flex items-center gap-1.5">
+                  {apiKeySaved ? <><Check size={14} /> Saved</> : loading ? 'Saving...' : 'Save'}
+                </button>
+              </div>
             )}
           </div>
         )}
 
-        {/* Create Inbox Modal */}
-        {showCreateInbox && (
-          <div className="bg-white dark:bg-zinc-900 rounded-2xl border border-gray-200 dark:border-zinc-800 p-6">
-            <h3 className="font-semibold mb-3">Create New Inbox</h3>
-            <input
-              type="text"
-              value={newInboxName}
-              onChange={e => setNewInboxName(e.target.value)}
-              placeholder="Display name (e.g. AI Secretary)"
-              className="w-full px-4 py-3 bg-gray-50 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-xl text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
+        {/* Create Inbox */}
+        {showCreateInbox && view === 'inboxes' && (
+          <div className="bg-white dark:bg-zinc-900 rounded-2xl border border-gray-200 dark:border-zinc-800 p-4">
+            <h3 className="font-semibold text-sm mb-3">Create New Inbox</h3>
             <div className="flex gap-2">
+              <input
+                type="text"
+                value={newInboxName}
+                onChange={e => setNewInboxName(e.target.value)}
+                placeholder="Display name (e.g. AI Secretary)"
+                className="flex-1 px-3 py-2 bg-gray-50 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                onKeyDown={e => e.key === 'Enter' && createInbox()}
+              />
               <button onClick={createInbox} disabled={loading} className="px-4 py-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-50 text-sm font-medium">
                 {loading ? 'Creating...' : 'Create'}
               </button>
-              <button onClick={() => setShowCreateInbox(false)} className="px-4 py-2 bg-gray-100 dark:bg-zinc-800 rounded-xl hover:bg-gray-200 dark:hover:bg-zinc-700 text-sm">Cancel</button>
+              <button onClick={() => setShowCreateInbox(false)} className="px-3 py-2 bg-gray-100 dark:bg-zinc-800 rounded-xl hover:bg-gray-200 dark:hover:bg-zinc-700 text-sm">✕</button>
             </div>
           </div>
         )}
 
         {/* Inboxes List */}
-        {view === 'inboxes' && apiKeySet && (
+        {view === 'inboxes' && (
           <div className="space-y-2">
             {loading && inboxes.length === 0 && (
               <div className="text-center py-12 text-gray-500">
@@ -280,7 +288,7 @@ export default function EmailPage() {
                 Loading inboxes...
               </div>
             )}
-            {!loading && inboxes.length === 0 && (
+            {!loading && apiKeySet && inboxes.length === 0 && (
               <div className="text-center py-16">
                 <Inbox className="mx-auto mb-4 text-gray-300 dark:text-gray-600" size={48} />
                 <p className="text-gray-500 dark:text-gray-400 mb-4">No inboxes yet</p>
