@@ -173,7 +173,7 @@ export default function OrchestratorPage() {
                     setMessages(prev => [...prev, {
                         role: 'model',
                         agent: data.agent || 'local-exec',
-                        content: `❌ LOCAL EXEC FAILED\n${data.localExec.error || 'Unknown error'}`
+                        content: `❌ LOCAL EXEC FAILED\n${data.localExec?.error || 'Unknown error'}`
                     }]);
                 }
             }
@@ -225,7 +225,7 @@ export default function OrchestratorPage() {
         }
     };
 
-    const isStatusMsg = (c: string) => c.startsWith('✅') || c.startsWith('❌') || c.startsWith('⏳') || c.startsWith('⚡');
+    const isStatusMsg = (c: string) => c?.startsWith('✅') || c?.startsWith('❌') || c?.startsWith('⏳') || c?.startsWith('⚡');
 
     const isSessionActive = sessionState === 'ready';
     const isConnecting = sessionState === 'connecting' || sessionState === 'settingUp';
