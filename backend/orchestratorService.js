@@ -283,16 +283,19 @@ async function executeTerminalTask(taskDescription, cwd) {
         // 4. OBSERVE — Poll for result
         const deadline = Date.now() + COMMAND_TIMEOUT;
         let cmdResult = null;
+        console.log(`[Orchestrator] TerminalTask waiting for result of: ${cmdData.command} (timeout ${COMMAND_TIMEOUT / 1000}s)...`);
         while (Date.now() < deadline) {
             await new Promise(r => setTimeout(r, POLL_INTERVAL));
             const updated = await LocalExecCommand.findById(doc._id);
             if (updated && (updated.status === 'done' || updated.status === 'error')) {
                 cmdResult = { output: updated.output || '(no output)', exitCode: updated.exitCode || 0 };
+                console.log(`[Orchestrator] TerminalTask got result for: ${cmdData.command}`);
                 break;
             }
         }
 
         if (!cmdResult) {
+            console.log(`[Orchestrator] TerminalTask TIMEOUT for: ${cmdData.command} — local-exec-agent may not be running`);
             cmdResult = { output: 'Timeout: comanda nu a fost executată în 5 minute. Verifică dacă local-exec-agent rulează.', exitCode: 1 };
         }
 
@@ -372,7 +375,7 @@ function detectIntent(text, bookingData, taskData, escalateData, githubData, cro
     if (/sistem|cpu|ram|memorie|disk|spațiu|procese.*rulează|ip.*meu|uptime|network/.test(lower)) return 'sysinfo';
     if (/deschide.*folder|deschide.*notepad|deschide.*chrome|deschide.*url|deschide.*aplicați|open.*folder/.test(lower)) return 'launcher';
     if (/mergi pe|deschide site|navigheaz|comand[aă].*pe|caut[aă].*pe.*web|completea.*formular|browser|web.*agent|automat.*web|wolt|uber.*eats|booking\.com|ryanair|emag|amazon/.test(lower)) return 'web-agent';
-    if (/instale[aă]z[aă]|configurea|setup.*environment|verifică.*și.*repar|install.*pachet|npm.*install.*-g/i.test(lower)) return 'terminal-task';
+    if (/instale[aă]z[aă]|configurea|setup.*environment|verifică.*și.*repar|install.*pachet|npm.*install.*-g|verific[aă].*versiune|ce versiune|versiunea de|node.*version|npm.*version|python.*version|update[aă]z[aă].*pachet|dezinstale[aă]z[aă]|uninstall/i.test(lower)) return 'terminal-task';
     if (/execut[aă].*local|rulea.*pe pc|comand[aă].*local|local.*exec|pe pc|pe local|pe computer|deschide.*pe.*pc|rulează.*local/.test(lower)) return 'local-exec';
     if (/(?<!\bvs\s)\bcod(?!e[\s.])|fix\b|bug|refactor|review.*pr|analize.*cod|implementea|debug/.test(lower)) return 'coding';
     if (/auto.?fix|repar.*issue|fixeaz.*issue|batch.*fix/.test(lower)) return 'gh-issues';
