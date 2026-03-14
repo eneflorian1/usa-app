@@ -365,6 +365,11 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
     // Clean response
     responseText = cleanAllTags(responseText);
 
+    // Fill empty reply when Gemini only generated a tag
+    if (terminalTaskData && !responseText.trim()) {
+        responseText = `Pornesc terminal task: ${terminalTaskData.task}`;
+    }
+
     // 5. Execute actions
     let bookingResult = null;
     let taskResult = null;
