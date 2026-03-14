@@ -76,6 +76,13 @@ Pentru WEB AGENT (automatizare browser — poate face ORICE pe web: comenzi, rez
 <WEB_AGENT_JSON>{"task":"Caută pe Google cele mai bune restaurante din Cluj","startUrl":"https://google.com"}</WEB_AGENT_JSON>
 <WEB_AGENT_JSON>{"task":"Completează formularul de contact pe site-ul X cu mesajul Y"}</WEB_AGENT_JSON>
 
+Pentru TERMINAL TASK (task autonom multi-step pe PC-ul local — instalare software, configurare, diagnosticare, orice necesită mai mulți pași):
+<TERMINAL_TASK_JSON>{"task":"Install Node.js","steps":["node --version","winget install OpenJS.NodeJS.LTS"]}</TERMINAL_TASK_JSON>
+<TERMINAL_TASK_JSON>{"task":"Verifică și repară conexiunea la internet","steps":["ping google.com","ipconfig /all"]}</TERMINAL_TASK_JSON>
+- Folosește TERMINAL_TASK_JSON când: taskul necesită mai multe comenzi secvențiale, verificare rezultat, și decizie pas cu pas
+- Diferit de LOCAL_EXEC_JSON: TERMINAL_TASK este autonom multi-step (agent loop), LOCAL_EXEC este o singură comandă fire-and-forget
+- Exemple: "instalează Node.js", "configurează Git", "verifică de ce nu merge npm", "curăță spațiu pe disk"
+
 Pentru LOCAL EXEC (execuție comandă pe PC-ul local al utilizatorului — comenzi bash/shell, scripturi, deschide aplicații):
 <LOCAL_EXEC_JSON>{"command":"npm run dev","label":"Start dev server","cwd":"/home/user/project"}</LOCAL_EXEC_JSON>
 <LOCAL_EXEC_JSON>{"command":"git pull && npm install","label":"Update repo"}</LOCAL_EXEC_JSON>
@@ -190,10 +197,12 @@ function cleanAllTags(text) {
         .replace(/<FILESYSTEM_JSON>[\s\S]*?<\/FILESYSTEM_JSON>/g, '')
         .replace(/<SYSINFO_JSON>[\s\S]*?<\/SYSINFO_JSON>/g, '')
         .replace(/<LAUNCHER_JSON>[\s\S]*?<\/LAUNCHER_JSON>/g, '')
+        .replace(/<TERMINAL_TASK_JSON>[\s\S]*?<\/TERMINAL_TASK_JSON>/g, '')
         .trim();
 }
 
-function detectIntent(text, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData, localExecData, screenshotData, clipboardData, filesystemData, sysinfoData, launcherData, codingLoopData) {
+function detectIntent(text, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData, localExecData, screenshotData, clipboardData, filesystemData, sysinfoData, launcherData, codingLoopData, terminalTaskData) {
+    if (terminalTaskData) return 'terminal-task';
     if (codingLoopData) return 'coding-loop';
     if (screenshotData) return 'screenshot';
     if (clipboardData) return 'clipboard';
@@ -217,6 +226,7 @@ function detectIntent(text, bookingData, taskData, escalateData, githubData, cro
     if (/sistem|cpu|ram|memorie|disk|spațiu|procese.*rulează|ip.*meu|uptime|network/.test(lower)) return 'sysinfo';
     if (/deschide.*folder|deschide.*notepad|deschide.*chrome|deschide.*url|deschide.*aplicați|open.*folder/.test(lower)) return 'launcher';
     if (/mergi pe|deschide site|navigheaz|comand[aă].*pe|caut[aă].*pe.*web|completea.*formular|browser|web.*agent|automat.*web|wolt|uber.*eats|booking\.com|ryanair|emag|amazon/.test(lower)) return 'web-agent';
+    if (/instalea.*pe.*pc|configureaz[aă]|diagnostich|verific[aă].*de ce nu|cur[aă][tț][aă].*spa[tț]iu|repara.*conexiune/.test(lower)) return 'terminal-task';
     if (/execut[aă].*local|rulea.*pe pc|comand[aă].*local|local.*exec|pe pc|pe local|pe computer|deschide.*pe.*pc|rulează.*local/.test(lower)) return 'local-exec';
     if (/(?<!\bvs\s)\bcod(?!e[\s.])|fix\b|bug|refactor|review.*pr|analize.*cod|implementea|debug/.test(lower)) return 'coding';
     if (/auto.?fix|repar.*issue|fixeaz.*issue|batch.*fix/.test(lower)) return 'gh-issues';
@@ -226,6 +236,83 @@ function detectIntent(text, bookingData, taskData, escalateData, githubData, cro
     if (/rezerv|book|camer|cazare|check.?in|programare/.test(lower)) return 'booking';
     if (/task|sarcin|plan|todo|treab/.test(lower)) return 'planner';
     return 'general';
+}
+
+// ===================== TERMINAL TASK — ReAct Loop =====================
+
+async function executeAndWait(command, cwd, timeout = 5 * 60 * 1000) {
+    const LocalExecCommand = mongoose.model('LocalExecCommand');
+    const doc = await LocalExecCommand.create({
+        command,
+        label: 'Terminal Task Step',
+        cwd: cwd || ''
+    });
+    const pollInterval = 3000;
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+        await new Promise(r => setTimeout(r, pollInterval));
+        const updated = await LocalExecCommand.findById(doc._id);
+        if (updated.status === 'done' || updated.status === 'error') {
+            return { output: updated.output || '', exitCode: updated.exitCode };
+        }
+    }
+    return { output: 'TIMEOUT: Command did not complete within ' + Math.round(timeout / 1000) + 's', exitCode: -1 };
+}
+
+async function executeTerminalTask(taskDescription, sessionId) {
+    const maxIterations = 10;
+    const history = [];
+
+    const model = await getGeminiModel();
+
+    for (let i = 0; i < maxIterations; i++) {
+        // 1. THINK — Ask Gemini what to do next
+        const reactPrompt = `Ești un agent terminal autonom. Execuți un task pas cu pas pe PC-ul utilizatorului (Windows).
+
+TASK: ${taskDescription}
+
+ISTORIC COMENZI:
+${history.length === 0 ? '(niciuna încă)' : history.map(h => `$ ${h.command}\nExit: ${h.exitCode}\nOutput:\n${h.output}\n---`).join('\n')}
+
+INSTRUCȚIUNI:
+- Analizează output-ul comenzii anterioare
+- Dacă taskul e complet, răspunde cu <DONE>raport final detaliat</DONE>
+- Dacă mai e ceva de făcut, generează următoarea comandă: <CMD>{"command":"...","cwd":"..."}</CMD>
+- Dacă a apărut o eroare, încearcă s-o rezolvi autonom
+- Sistem: Windows 10/11, PowerShell/CMD disponibil
+- Nu genera mai mult de o comandă per iterație`;
+
+        const chat = model.startChat({ history: [] });
+        const result = await chat.sendMessage(reactPrompt);
+        const response = result.response.text();
+        console.log(`[TerminalTask] Iteration ${i + 1}:`, response.substring(0, 200));
+
+        // 2. Check if done
+        const doneMatch = response.match(/<DONE>([\s\S]*?)<\/DONE>/);
+        if (doneMatch) {
+            return doneMatch[1].trim();
+        }
+
+        // 3. ACT — Extract and execute command
+        const cmdData = extractJSON(response, 'CMD');
+        if (!cmdData || !cmdData.command) {
+            // Gemini didn't produce a command or DONE — try to extract inline
+            const inlineCmd = response.match(/```(?:bash|cmd|powershell)?\s*\n?([\s\S]*?)```/);
+            if (inlineCmd) {
+                const cmd = inlineCmd[1].trim().split('\n')[0];
+                const cmdResult = await executeAndWait(cmd, '');
+                history.push({ command: cmd, output: cmdResult.output, exitCode: cmdResult.exitCode });
+                continue;
+            }
+            return `Agentul nu a putut genera o comandă la iterația ${i + 1}. Istoric:\n${history.map(h => `$ ${h.command} → exit ${h.exitCode}`).join('\n')}`;
+        }
+
+        // 4. OBSERVE — Execute and record result
+        const cmdResult = await executeAndWait(cmdData.command, cmdData.cwd || '');
+        history.push({ command: cmdData.command, output: cmdResult.output, exitCode: cmdResult.exitCode });
+    }
+
+    return `Am atins limita de ${maxIterations} iterații. Iată ce am realizat:\n${history.map(h => `$ ${h.command} → exit ${h.exitCode}`).join('\n')}`;
 }
 
 // ===================== MAIN FUNCTION =====================
@@ -272,7 +359,8 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
     const filesystemData = extractJSON(responseText, 'FILESYSTEM_JSON');
     const sysinfoData = extractJSON(responseText, 'SYSINFO_JSON');
     const launcherData = extractJSON(responseText, 'LAUNCHER_JSON');
-    const intent = detectIntent(userMessage, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData, localExecData, screenshotData, clipboardData, filesystemData, sysinfoData, launcherData, codingLoopData);
+    const terminalTaskData = extractJSON(responseText, 'TERMINAL_TASK_JSON');
+    const intent = detectIntent(userMessage, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData, localExecData, screenshotData, clipboardData, filesystemData, sysinfoData, launcherData, codingLoopData, terminalTaskData);
 
     // Clean response
     responseText = cleanAllTags(responseText);
@@ -288,6 +376,7 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
     let processResult = null;
     let webAgentResult = null;
     let localExecResult = null;
+    let terminalTaskResult = null;
 
     // Process booking
     if (bookingData && bookingData.guestName && bookingData.checkIn && bookingData.checkOut) {
@@ -578,6 +667,20 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
         }
     }
 
+    // Process Terminal Task — autonomous ReAct loop
+    if (terminalTaskData && terminalTaskData.task) {
+        try {
+            console.log('[Orchestrator] TerminalTask starting:', terminalTaskData.task);
+            const report = await executeTerminalTask(terminalTaskData.task, sessionId);
+            terminalTaskResult = { success: true, report };
+            responseText = report;
+            console.log('[Orchestrator] TerminalTask done:', report.substring(0, 200));
+        } catch (err) {
+            console.error('[Orchestrator] TerminalTask error:', err.message);
+            terminalTaskResult = { success: false, error: err.message };
+        }
+    }
+
     // Process Web Agent action
     if (webAgentData) {
         try {
@@ -610,7 +713,8 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
         ghIssues: ghIssuesResult,
         process: processResult,
         webAgent: webAgentResult,
-        localExec: localExecResult
+        localExec: localExecResult,
+        terminalTask: terminalTaskResult
     };
 }
 

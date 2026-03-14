@@ -24,7 +24,9 @@
       "WebFetch(domain:github.com)",
       "WebSearch",
       "Bash(npm install @modelcontextprotocol/sdk)",
-      "Bash(timeout 5 node -e \":*)"
+      "Bash(timeout 5 node -e \":*)",
+      "Bash(echo \"result: $?\")",
+      "Bash(CLAUDECODE= claude -p \"say hello, what model are you? reply in 1 sentence\" --output-format text --model sonnet --dangerously-skip-permissions --no-session-persistence)"
     ]
   }
 }

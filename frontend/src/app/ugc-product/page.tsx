@@ -39,6 +39,7 @@ interface Product {
     systemPrompt: string;
     visualBible: string;
     visualBibleGeneratedAt: string | null;
+    avatarImages: ReferenceImage[];
     generations: Generation[];
 }
 
@@ -57,7 +58,7 @@ export default function UgcProductPage() {
     const [newProductDesc, setNewProductDesc] = useState('');
 
     // Upload & Generation states
-    const [uploadingObj, setUploadingObj] = useState<'product' | 'reference' | null>(null);
+    const [uploadingObj, setUploadingObj] = useState<'product' | 'reference' | 'avatar' | null>(null);
     const [generatingVB, setGeneratingVB] = useState(false);
     const [generatingUGC, setGeneratingUGC] = useState(false);
     const [viewImage, setViewImage] = useState<string | null>(null);
@@ -68,10 +69,13 @@ export default function UgcProductPage() {
 
     // UGC Generation state
     const [scenePrompt, setScenePrompt] = useState('');
-    const [aspectRatio, setAspectRatio] = useState('auto');
+    const [aspectRatio, setAspectRatio] = useState('1:1');
+    const [avatarSelection, setAvatarSelection] = useState('uploaded'); // 'random', 'preset1', 'preset2', 'custom', 'uploaded'
+    const [customAvatar, setCustomAvatar] = useState('');
 
     const productFileInputRef = useRef<HTMLInputElement>(null);
     const referenceFileInputRef = useRef<HTMLInputElement>(null);
+    const avatarFileInputRef = useRef<HTMLInputElement>(null);
 
     // Active tab: 'product' | 'bible' | 'generations'
     const [activeTab, setActiveTab] = useState<'product' | 'bible' | 'generations'>('product');
@@ -162,7 +166,7 @@ export default function UgcProductPage() {
         });
     };
 
-    const handleUploadImages = async (files: FileList | File[], type: 'product' | 'reference') => {
+    const handleUploadImages = async (files: FileList | File[], type: 'product' | 'reference' | 'avatar') => {
         if (!product) return;
         const imageFiles = Array.from(files).filter(f => f.type.startsWith('image/'));
         if (imageFiles.length === 0) return;
@@ -174,34 +178,54 @@ export default function UgcProductPage() {
             for (let i = 0; i < imageFiles.length; i++) {
                 const file = imageFiles[i];
                 const base64 = await fileToBase64(file);
+
+                let labelInfo = {};
+                if (type === 'reference') labelInfo = { label: `Style Image ${product.referenceImages.length + i + 1}` };
+                else if (type === 'avatar') labelInfo = { label: `Avatar Photo ${(product.avatarImages || []).length + i + 1}` };
+
                 imagesPayload.push({
                     name: file.name,
                     mimeType: file.type || 'image/jpeg',
                     imageData: base64,
-                    ...(type === 'reference' ? { label: `Image ${product.referenceImages.length + i + 1}` } : {})
+                    ...labelInfo
                 });
             }
 
-            const endpoint = type === 'product' ? 'product-images' : 'reference-images';
-            await fetch(`/api/ugc-product/${product._id}/${endpoint}`, {
+            let endpoint = 'product-images';
+            if (type === 'reference') endpoint = 'reference-images';
+            else if (type === 'avatar') endpoint = 'avatar-images';
+
+            await fetch(`/api/ugc-product/upload`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ images: imagesPayload }),
+                body: JSON.stringify({
+                    productId: product._id,
+                    endpoint: endpoint,
+                    images: imagesPayload
+                }),
+            }).then(res => {
+                if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
             });
 
             await loadProductData(product._id, false);
         } catch (err) {
-            console.error('Upload failed', err);
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            console.error('Upload failed details', err);
+            alert(`Eroare la încărcare: ${errorMessage}`);
         }
 
         setUploadingObj(null);
         if (type === 'product' && productFileInputRef.current) productFileInputRef.current.value = '';
         if (type === 'reference' && referenceFileInputRef.current) referenceFileInputRef.current.value = '';
+        if (type === 'avatar' && avatarFileInputRef.current) avatarFileInputRef.current.value = '';
     };
 
-    const deleteImage = async (imgIdx: number, type: 'product' | 'reference') => {
+    const deleteImage = async (imgIdx: number, type: 'product' | 'reference' | 'avatar') => {
         if (!product) return;
-        const endpoint = type === 'product' ? 'product-images' : 'reference-images';
+        let endpoint = 'product-images';
+        if (type === 'reference') endpoint = 'reference-images';
+        else if (type === 'avatar') endpoint = 'avatar-images';
+
         await fetch(`/api/ugc-product/${product._id}/${endpoint}/${imgIdx}`, { method: 'DELETE' });
         loadProductData(product._id, false);
     };
@@ -233,15 +257,30 @@ export default function UgcProductPage() {
     const generateCollection = async () => {
         if (!product || generatingUGC) return;
         setGeneratingUGC(true);
+
+        let finalAvatarDesc = '';
+        if (avatarSelection === 'preset1') finalAvatarDesc = 'a young trendy Caucasian female, early 20s, natural makeup';
+        else if (avatarSelection === 'preset2') finalAvatarDesc = 'an athletic young African American male, short hair, sharp jawline';
+        else if (avatarSelection === 'preset3') finalAvatarDesc = 'an elegant Asian female, 30s, sophisticated look';
+        else if (avatarSelection === 'custom' && customAvatar.trim()) finalAvatarDesc = customAvatar.trim();
+        else if (avatarSelection === 'uploaded') finalAvatarDesc = 'the exact same person as in the uploaded reference identity photos';
+
         try {
             await fetch(`/api/ugc-product/${product._id}/generate-collection`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ count: 10, aspectRatio }),
+                body: JSON.stringify({ count: 10, aspectRatio, avatarDesc: finalAvatarDesc }),
             });
             await loadProductData(product._id, false);
             setActiveTab('generations');
         } catch (err) { }
+        setGeneratingUGC(false);
+    };
+
+    const cancelGeneration = async () => {
+        if (!product) return;
+        await fetch(`/api/ugc-product/${product._id}/cancel-generation`, { method: 'POST' });
+        await loadProductData(product._id, false);
         setGeneratingUGC(false);
     };
 
@@ -469,6 +508,43 @@ export default function UgcProductPage() {
                                             )}
                                         </div>
                                     </div>
+
+                                    {/* Avatar Images Box */}
+                                    <div className="border border-gra-200 dark:border-zinc-800 rounded-2xl bg-white dark:bg-zinc-900 overflow-hidden">
+                                        <div className="px-4 py-3 border-b border-gray-100 dark:border-zinc-800/50 flex justify-between items-center bg-gray-50/50 dark:bg-zinc-900/50">
+                                            <h3 className="text-sm font-semibold flex items-center gap-2">
+                                                <Settings2 size={16} className="text-amber-500" /> Poze Identitate Avatar
+                                                <span className="bg-amber-100 dark:bg-amber-900/30 text-amber-700 px-2 py-0.5 rounded-full text-[10px]">{product.avatarImages?.length || 0}</span>
+                                            </h3>
+                                        </div>
+                                        <div className="p-4">
+                                            <p className="text-[11px] text-gray-500 mb-3">Încarcă 3-5 poze cu o persoană (față, corp) dacă vrei ca generarea să folosească exact persoana respectivă. Ignoră acest pas pentru a folosi modele AI random.</p>
+                                            {(!product.avatarImages || product.avatarImages.length === 0) ? (
+                                                <div className="text-center py-6 text-gray-400">
+                                                    <label className="cursor-pointer inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-50 text-amber-600 text-xs font-semibold hover:bg-amber-100 transition-colors">
+                                                        <Plus size={14} /> Adaugă Poze Avatar
+                                                        <input type="file" multiple accept="image/*" className="hidden" onChange={e => e.target.files && handleUploadImages(e.target.files, 'avatar')} ref={avatarFileInputRef} />
+                                                    </label>
+                                                </div>
+                                            ) : (
+                                                <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 gap-2">
+                                                    {product.avatarImages.map((img, idx) => (
+                                                        <div key={idx} className="aspect-square relative group rounded-lg overflow-hidden border border-gray-200 dark:border-zinc-800 bg-zinc-900 cursor-pointer" onClick={() => setViewImage(`data:${img.mimeType};base64,${img.imageData}`)}>
+                                                            <img src={`data:${img.mimeType};base64,${img.imageData}`} alt={img.name} className="w-full h-full object-cover" />
+                                                            <button onClick={(e) => { e.stopPropagation(); deleteImage(idx, 'avatar') }} className="absolute bottom-1 right-1 lg:opacity-0 group-hover:opacity-100 p-1 bg-red-500/80 text-white rounded hover:bg-red-600 transition-all">
+                                                                <Trash2 size={12} />
+                                                            </button>
+                                                        </div>
+                                                    ))}
+                                                    <label className="aspect-square cursor-pointer flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-gray-300 dark:border-zinc-700 hover:border-amber-400 hover:bg-amber-50/50 dark:hover:bg-amber-900/10 transition-colors">
+                                                        {uploadingObj === 'avatar' ? <RefreshCw className="animate-spin text-amber-500" size={20} /> : <Plus className="text-gray-400" size={20} />}
+                                                        <span className="text-[10px] text-gray-500 font-medium mt-1">Upload</span>
+                                                        <input type="file" multiple accept="image/*" className="hidden" onChange={e => e.target.files && handleUploadImages(e.target.files, 'avatar')} ref={avatarFileInputRef} />
+                                                    </label>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
                                 </div>
 
                                 {/* Right Column: Generare / Prompts */}
@@ -577,11 +653,43 @@ export default function UgcProductPage() {
                                     <div className="relative z-10">
                                         <div className="flex flex-col gap-4">
                                             <div className="w-full flex flex-col md:flex-row gap-4 items-center justify-between bg-white/5 p-5 rounded-xl border border-white/10">
-                                                <div>
+                                                <div className="flex-1">
                                                     <h4 className="font-bold text-white text-base">Colecție Auto-UGC (10 Ipostaze)</h4>
-                                                    <p className="text-white/60 text-xs mt-1 max-w-sm">Sistemul va deduce și genera automat 10 scene și contexte unice pentru produsul tău, respectând 100% stilul din Visual Bible.</p>
+                                                    <p className="text-white/60 text-xs mt-1 max-w-sm mb-3">Sistemul va deduce și genera automat 10 scene unice pentru produsul tău, respectând 100% stilul din Visual Bible.</p>
+
+                                                    {/* Avatar Selector */}
+                                                    <div className="flex flex-col gap-2 max-w-sm">
+                                                        <label className="text-xs font-semibold text-white/80">Selectează Avatar (Opțional)</label>
+                                                        <select
+                                                            value={avatarSelection}
+                                                            onChange={e => setAvatarSelection(e.target.value)}
+                                                            className="w-full bg-white/10 border border-white/20 text-white rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-400"
+                                                        >
+                                                            <option value="random" className="bg-zinc-800">Sistem Random / Artistic</option>
+                                                            <option value="preset1" className="bg-zinc-800">Femeie, 20s (Trendy)</option>
+                                                            <option value="preset2" className="bg-zinc-800">Bărbat, Atletic (Sport/Grooming)</option>
+                                                            <option value="preset3" className="bg-zinc-800">Femeie, 30s (Elegant/Beauty)</option>
+                                                            <option value="uploaded" className="bg-zinc-800">Folosește Pozele Avatarului (Identitate)</option>
+                                                            <option value="custom" className="bg-zinc-800">Custom Prompt...</option>
+                                                        </select>
+                                                        {avatarSelection === 'custom' && (
+                                                            <input
+                                                                type="text"
+                                                                value={customAvatar}
+                                                                onChange={e => setCustomAvatar(e.target.value)}
+                                                                placeholder="Ex: Femeie asiatică de 25 de ani, păr roșcat scurt..."
+                                                                className="w-full mt-1 bg-white/5 border border-white/20 text-white placeholder-white/40 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-400"
+                                                            />
+                                                        )}
+                                                        {avatarSelection !== 'random' && (
+                                                            <p className="text-[10px] text-indigo-300">
+                                                                * Când folosești un avatar, se vor genera 10 unghiuri vizuale FIXE pentru a evidenția produsul și persoana din mai multe perspective (ex: Luma/Higgsfield style).
+                                                            </p>
+                                                        )}
+                                                    </div>
                                                 </div>
-                                                <div className="flex flex-col sm:flex-row items-center gap-3 shrink-0 w-full md:w-auto">
+
+                                                <div className="flex flex-col sm:flex-row items-center gap-3 shrink-0 w-full md:w-auto mt-4 md:mt-0">
                                                     <div className="w-full sm:w-auto">
                                                         <select
                                                             value={aspectRatio}
@@ -591,17 +699,22 @@ export default function UgcProductPage() {
                                                             {ASPECT_RATIOS.map(ar => <option key={ar} value={ar} className="bg-zinc-800 text-white">{ar}</option>)}
                                                         </select>
                                                     </div>
-                                                    <button
-                                                        onClick={generateCollection}
-                                                        disabled={generatingUGC || !product.visualBible || product.productImages.length === 0}
-                                                        className="w-full sm:w-auto px-6 py-3 bg-white text-black hover:bg-gray-100 rounded-xl font-bold flex items-center justify-center gap-2 disabled:opacity-50 transition-colors shadow-lg"
-                                                    >
-                                                        {generatingUGC ? (
-                                                            <><RefreshCw className="animate-spin text-indigo-600" size={18} /> Se pornește...</>
-                                                        ) : (
-                                                            <>🚀 Generează 10 Poze</>
-                                                        )}
-                                                    </button>
+                                                    {generatingUGC || product.generations.some(g => g.status === 'pending') ? (
+                                                        <button
+                                                            onClick={cancelGeneration}
+                                                            className="w-full sm:w-auto px-6 py-3 bg-red-500 hover:bg-red-600 text-white rounded-xl font-bold flex items-center justify-center gap-2 transition-colors shadow-lg"
+                                                        >
+                                                            <RefreshCw className="animate-spin text-white" size={18} /> Stop Generare
+                                                        </button>
+                                                    ) : (
+                                                        <button
+                                                            onClick={generateCollection}
+                                                            disabled={!product.visualBible || product.productImages.length === 0}
+                                                            className="w-full sm:w-auto px-6 py-3 bg-white text-black hover:bg-gray-100 rounded-xl font-bold flex items-center justify-center gap-2 disabled:opacity-50 transition-colors shadow-lg"
+                                                        >
+                                                            🚀 Generează 10 Poze
+                                                        </button>
+                                                    )}
                                                 </div>
                                             </div>
                                         </div>

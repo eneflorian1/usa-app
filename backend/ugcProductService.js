@@ -123,9 +123,10 @@ async function generateVisualBible(systemPrompt, referenceImages) {
  * @param {string} visualBible - The Visual Bible text
  * @param {string} scenePrompt - User's scene description
  * @param {{ aspectRatio?: string }} options
+ * @param {{ data: string, mimeType: string }[]} [avatarImages] - Avatar photos
  * @returns {{ imageData: string, description: string, filePath: string, filename: string }}
  */
-async function generateProductUGC(productImages, visualBible, scenePrompt, options = {}) {
+async function generateProductUGC(productImages, visualBible, scenePrompt, options = {}, avatarImages = []) {
     const apiKey = await getApiKey();
     const ai = new GoogleGenAI({ apiKey });
 
@@ -143,6 +144,19 @@ async function generateProductUGC(productImages, visualBible, scenePrompt, optio
                 data: productImages[i].data,
             },
         });
+    }
+
+    // Avatar identity images
+    if (avatarImages && avatarImages.length > 0) {
+        contents.push({ text: `Here are the AVATAR IDENTITY images. The person in the output MUST highly resemble this specific person:` });
+        for (let i = 0; i < avatarImages.length; i++) {
+            contents.push({
+                inlineData: {
+                    mimeType: avatarImages[i].mimeType || 'image/jpeg',
+                    data: avatarImages[i].data,
+                },
+            });
+        }
     }
 
     // Visual Bible
@@ -210,9 +224,40 @@ async function generateProductUGC(productImages, visualBible, scenePrompt, optio
  * Generate N different scene prompts based on the Visual Bible and product
  * @param {string} visualBible - The visual bible text
  * @param {number} count - Number of prompts to generate
+ * @param {string} [avatarDesc] - Optional avatar description for fixed angles
  * @returns {Promise<string[]>} Array of prompts
  */
-async function generateScenePrompts(visualBible, count = 10) {
+async function generateScenePrompts(visualBible, count = 10, avatarDesc = null) {
+    if (avatarDesc && avatarDesc.trim() !== '') {
+        // Use fixed camera angles to ensure consistency across avatars
+        console.log(`[UGC Product] Generating ${count} fixed angle prompts for avatar: ${avatarDesc}`);
+        const fixedAngles = [
+            "Straight-on front view, eye level",
+            "Side profile view, 90 degrees",
+            "45-degree ¾ angle portrait view",
+            "Low angle hero shot, looking up slightly",
+            "High angle shot, looking down slightly",
+            "Over-the-shoulder perspective",
+            "Dynamic action shot, motion blur in background",
+            "Close-up detail shot focusing on the avatar interacting with the product",
+            "Wide environmental shot showing full body",
+            "Cinematic silhouette or rim-lit profile"
+        ];
+
+        const prompts = [];
+        for (let i = 0; i < Math.min(count, fixedAngles.length); i++) {
+            prompts.push(
+                `Avatar wearing the product (${fixedAngles[i]})`
+            );
+        }
+
+        // If more than 10 requested, repeat with slight variations (not typical)
+        while (prompts.length < count) {
+            prompts.push(`Avatar wearing the product (Action shot variation)`);
+        }
+        return prompts;
+    }
+
     const apiKey = await getApiKey();
     const ai = new GoogleGenAI({ apiKey });
 

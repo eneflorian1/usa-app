@@ -1,12 +1,16 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useGeminiLive } from '@/hooks/useGeminiLive';
 
 interface Message {
     role: 'user' | 'model';
     content: string;
     agent?: string;
+    execId?: string;
+    execStatus?: 'pending' | 'running' | 'done' | 'error';
+    execOutput?: string;
+    execExitCode?: number | null;
 }
 
 interface OrchestratorResponse {
@@ -15,6 +19,8 @@ interface OrchestratorResponse {
     reply: string;
     booking: { success: boolean; error?: string; booking?: { _id: string; guestName: string; checkIn: string; checkOut: string } } | null;
     tasks: Array<{ _id: string; title: string; priority: string; dueDate: string }> | null;
+    localExec: { success: boolean; id?: string; command?: string; label?: string; status?: string; type?: string; error?: string } | null;
+    coding: { success: boolean; sessionId?: string; status?: string; message?: string; error?: string } | null;
 }
 
 const agentLabels: Record<string, { label: string; color: string; icon: string }> = {
@@ -23,6 +29,14 @@ const agentLabels: Record<string, { label: string; color: string; icon: string }
     info: { label: 'Knowledge Base', color: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300', icon: '📚' },
     escalate: { label: 'Escalated', color: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300', icon: '🚨' },
     general: { label: 'General', color: 'bg-gray-100 text-gray-600 dark:bg-zinc-800 dark:text-gray-300', icon: '💬' },
+    'local-exec': { label: 'Local PC', color: 'bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300', icon: '🖥️' },
+    screenshot: { label: 'Screenshot', color: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300', icon: '📸' },
+    sysinfo: { label: 'System Info', color: 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300', icon: '⚙️' },
+    filesystem: { label: 'Filesystem', color: 'bg-slate-100 text-slate-700 dark:bg-slate-900/40 dark:text-slate-300', icon: '📁' },
+    clipboard: { label: 'Clipboard', color: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300', icon: '📋' },
+    launcher: { label: 'Launcher', color: 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300', icon: '🚀' },
+    coding: { label: 'Coding Agent', color: 'bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-900/40 dark:text-fuchsia-300', icon: '💻' },
+    'terminal-task': { label: 'Terminal Task', color: 'bg-lime-100 text-lime-700 dark:bg-lime-900/40 dark:text-lime-300', icon: '⚡' },
 };
 
 export default function OrchestratorPage() {
@@ -33,6 +47,8 @@ export default function OrchestratorPage() {
     const [voiceMode, setVoiceMode] = useState(false);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
+    const pendingExecRef = useRef<Set<string>>(new Set());
+    const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
     const {
         sessionState,
@@ -47,6 +63,47 @@ export default function OrchestratorPage() {
 
     useEffect(() => { loadHistory(); }, []);
     useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+
+    // Poll pending exec commands for results
+    const pollPendingExecs = useCallback(async () => {
+        const ids = Array.from(pendingExecRef.current);
+        if (ids.length === 0) return;
+
+        for (const id of ids) {
+            try {
+                const res = await fetch(`/api/local-exec/${id}`);
+                if (!res.ok) continue;
+                const cmd = await res.json();
+                if (cmd.status === 'done' || cmd.status === 'error') {
+                    pendingExecRef.current.delete(id);
+                    setMessages(prev => prev.map(msg =>
+                        msg.execId === id
+                            ? {
+                                ...msg,
+                                execStatus: cmd.status,
+                                execOutput: cmd.output || '',
+                                execExitCode: cmd.exitCode,
+                                content: cmd.status === 'done'
+                                    ? `✅ ${msg.content.replace(/^⏳ /, '').replace(/\n.*$/, '')}\n${formatExecOutput(cmd.output)}`
+                                    : `❌ ${msg.content.replace(/^⏳ /, '').replace(/\n.*$/, '')}\nExit ${cmd.exitCode}: ${cmd.output || 'No output'}`
+                            }
+                            : msg
+                    ));
+                } else if (cmd.status === 'running') {
+                    setMessages(prev => prev.map(msg =>
+                        msg.execId === id && msg.execStatus !== 'running'
+                            ? { ...msg, execStatus: 'running', content: msg.content.replace('⏳ Pending', '⚡ Running') }
+                            : msg
+                    ));
+                }
+            } catch { }
+        }
+    }, []);
+
+    useEffect(() => {
+        pollIntervalRef.current = setInterval(pollPendingExecs, 3000);
+        return () => { if (pollIntervalRef.current) clearInterval(pollIntervalRef.current); };
+    }, [pollPendingExecs]);
 
     const loadHistory = async () => {
         try {
@@ -98,6 +155,45 @@ export default function OrchestratorPage() {
                     }]);
                 }
             }
+
+            // Handle localExec results (shell commands, MCP tools: screenshot, sysinfo, etc.)
+            if (data.localExec) {
+                if (data.localExec.success && data.localExec.id) {
+                    const execAgent = data.agent || 'local-exec';
+                    const label = data.localExec.label || data.localExec.command || 'Command';
+                    pendingExecRef.current.add(data.localExec.id);
+                    setMessages(prev => [...prev, {
+                        role: 'model',
+                        agent: execAgent,
+                        content: `⏳ Pending: ${label}\n🖥️ Queued on local PC — waiting for agent...`,
+                        execId: data.localExec?.id,
+                        execStatus: 'pending'
+                    }]);
+                } else if (!data.localExec.success) {
+                    setMessages(prev => [...prev, {
+                        role: 'model',
+                        agent: data.agent || 'local-exec',
+                        content: `❌ LOCAL EXEC FAILED\n${data.localExec.error || 'Unknown error'}`
+                    }]);
+                }
+            }
+
+            // Handle coding session results
+            if (data.coding) {
+                if (data.coding.success) {
+                    setMessages(prev => [...prev, {
+                        role: 'model',
+                        agent: 'coding',
+                        content: `✅ CODING SESSION STARTED\n${data.coding?.message || `Session: ${data.coding?.sessionId}`}\nStatus: ${data.coding?.status || 'running'}`
+                    }]);
+                } else if (data.coding && !data.coding.success && data.coding.error) {
+                    setMessages(prev => [...prev, {
+                        role: 'model',
+                        agent: 'coding',
+                        content: `❌ CODING ERROR\n${data.coding.error}`
+                    }]);
+                }
+            }
         } catch {
             setMessages(prev => [...prev, { role: 'model', content: '⚠️ Connection error. Please try again.' }]);
         }
@@ -109,6 +205,7 @@ export default function OrchestratorPage() {
         if (!confirm('Clear all orchestrator history?')) return;
         await fetch('/api/orchestrator/chat/history', { method: 'DELETE' });
         setMessages([]);
+        pendingExecRef.current.clear();
     };
 
     const toggleVoiceMode = () => {
@@ -128,7 +225,7 @@ export default function OrchestratorPage() {
         }
     };
 
-    const isStatusMsg = (c: string) => c.startsWith('✅') || c.startsWith('❌');
+    const isStatusMsg = (c: string) => c.startsWith('✅') || c.startsWith('❌') || c.startsWith('⏳') || c.startsWith('⚡');
 
     const isSessionActive = sessionState === 'ready';
     const isConnecting = sessionState === 'connecting' || sessionState === 'settingUp';
@@ -320,6 +417,7 @@ export default function OrchestratorPage() {
                         ) : (
                             messages.map((msg, idx) => {
                                 const agentInfo = msg.agent ? agentLabels[msg.agent] : null;
+                                const hasImage = msg.execOutput?.includes('[IMAGE:') || msg.content?.includes('[IMAGE:');
                                 return (
                                     <div key={idx}>
                                         {msg.role === 'model' && agentInfo && !isStatusMsg(msg.content) && (
@@ -335,13 +433,28 @@ export default function OrchestratorPage() {
                                 ${isStatusMsg(msg.content)
                                                     ? msg.content.startsWith('✅')
                                                         ? 'bg-emerald-50 dark:bg-emerald-900/30 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200'
-                                                        : 'bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-800 dark:text-red-200'
+                                                        : msg.content.startsWith('⏳') || msg.content.startsWith('⚡')
+                                                            ? 'bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200'
+                                                            : 'bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-800 dark:text-red-200'
                                                     : msg.role === 'user'
                                                         ? 'bg-violet-600 text-white rounded-br-md'
                                                         : 'bg-gray-100 dark:bg-zinc-800 text-gray-800 dark:text-gray-200 rounded-bl-md'
                                                 }
                               `}>
-                                                <div className="whitespace-pre-wrap">{msg.content}</div>
+                                                {/* Spinning indicator for pending/running exec */}
+                                                {msg.execId && (msg.execStatus === 'pending' || msg.execStatus === 'running') && (
+                                                    <div className="flex items-center gap-2 mb-1">
+                                                        <div className="w-3 h-3 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+                                                        <span className="text-xs font-medium">{msg.execStatus === 'pending' ? 'Waiting for agent...' : 'Executing...'}</span>
+                                                    </div>
+                                                )}
+                                                {hasImage ? (
+                                                    <div>
+                                                        {renderContentWithImages(msg.content)}
+                                                    </div>
+                                                ) : (
+                                                    <div className="whitespace-pre-wrap">{msg.content}</div>
+                                                )}
                                             </div>
                                         </div>
                                     </div>
@@ -387,4 +500,23 @@ export default function OrchestratorPage() {
             `}</style>
         </div>
     );
+}
+
+function formatExecOutput(output: string | undefined): string {
+    if (!output) return '(no output)';
+    if (output.includes('[IMAGE:')) return output;
+    const maxLen = 2000;
+    if (output.length > maxLen) return output.substring(0, maxLen) + '\n... (truncated)';
+    return output;
+}
+
+function renderContentWithImages(content: string) {
+    const lines = content.split('\n');
+    return lines.map((line, i) => {
+        const imgMatch = line.match(/\[IMAGE:(.*?)\](.*)/);
+        if (imgMatch) {
+            return <img key={i} src={`data:${imgMatch[1]};base64,${imgMatch[2]}`} alt="Screenshot" className="max-w-full rounded-lg mt-2" />;
+        }
+        return line ? <div key={i} className="whitespace-pre-wrap">{line}</div> : <br key={i} />;
+    });
 }
