@@ -190,7 +190,7 @@ export default function OrchestratorPage() {
                     setMessages(prev => [...prev, {
                         role: 'model',
                         agent: 'coding',
-                        content: `❌ CODING ERROR\n${data.coding.error}`
+                        content: `❌ CODING ERROR\n${data.coding?.error}`
                     }]);
                 }
             }
