@@ -37,6 +37,7 @@ const agentLabels: Record<string, { label: string; color: string; icon: string }
     launcher: { label: 'Launcher', color: 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300', icon: '🚀' },
     coding: { label: 'Coding Agent', color: 'bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-900/40 dark:text-fuchsia-300', icon: '💻' },
     'terminal-task': { label: 'Terminal Task', color: 'bg-lime-100 text-lime-700 dark:bg-lime-900/40 dark:text-lime-300', icon: '⚡' },
+    email: { label: 'Email', color: 'bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300', icon: '📧' },
 };
 
 export default function OrchestratorPage() {

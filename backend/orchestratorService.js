@@ -6,6 +6,7 @@ const { executeCodingAction } = require('./codingAgentService');
 const { executeGhIssuesAction } = require('./ghIssuesService');
 const { executeProcessAction } = require('./processManagerService');
 const { executeWebAgentAction } = require('./webAgentService');
+const { executeEmailAction } = require('./emailService');
 const os = require('os');
 
 /**
@@ -88,6 +89,14 @@ Pentru TERMINAL TASK (task-uri COMPLEXE pe terminal — instalări, configurări
 - Folosește TERMINAL_TASK_JSON când: instalare pachete/software, configurare environment, diagnosticare probleme, orice necesită mai mulți pași și verificări
 - Agentul va executa comenzi pas cu pas, va analiza output-ul, va rezolva erori autonom, și va raporta rezultatul final
 - DIFERIT de LOCAL_EXEC: TERMINAL_TASK este autonom multi-step, LOCAL_EXEC este o singură comandă fire-and-forget
+
+Pentru EMAIL (trimitere, citire emailuri, management inbox-uri via AgentMail):
+<EMAIL_JSON>{"action":"create_inbox","displayName":"AI Secretary"}</EMAIL_JSON>
+<EMAIL_JSON>{"action":"list_inboxes"}</EMAIL_JSON>
+<EMAIL_JSON>{"action":"send","inboxId":"...","to":"user@example.com","subject":"Hello","text":"Email body"}</EMAIL_JSON>
+<EMAIL_JSON>{"action":"list_messages","inboxId":"..."}</EMAIL_JSON>
+<EMAIL_JSON>{"action":"read_message","inboxId":"...","messageId":"..."}</EMAIL_JSON>
+- Folosește pentru: trimite email, citește email, crează inbox, "ce emailuri am", "trimite un email lui X"
 
 Pentru SCREENSHOT (captură ecran de pe PC-ul local):
 <SCREENSHOT_JSON>{"area":"full"}</SCREENSHOT_JSON>
@@ -347,10 +356,12 @@ function cleanAllTags(text) {
         .replace(/<SYSINFO_JSON>[\s\S]*?<\/SYSINFO_JSON>/g, '')
         .replace(/<LAUNCHER_JSON>[\s\S]*?<\/LAUNCHER_JSON>/g, '')
         .replace(/<TERMINAL_TASK_JSON>[\s\S]*?<\/TERMINAL_TASK_JSON>/g, '')
+        .replace(/<EMAIL_JSON>[\s\S]*?<\/EMAIL_JSON>/g, '')
         .trim();
 }
 
-function detectIntent(text, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData, localExecData, screenshotData, clipboardData, filesystemData, sysinfoData, launcherData, codingLoopData, terminalTaskData) {
+function detectIntent(text, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData, localExecData, screenshotData, clipboardData, filesystemData, sysinfoData, launcherData, codingLoopData, terminalTaskData, emailData) {
+    if (emailData) return 'email';
     if (terminalTaskData) return 'terminal-task';
     if (codingLoopData) return 'coding-loop';
     if (screenshotData) return 'screenshot';
@@ -375,6 +386,7 @@ function detectIntent(text, bookingData, taskData, escalateData, githubData, cro
     if (/sistem|cpu|ram|memorie|disk|spațiu|procese.*rulează|ip.*meu|uptime|network/.test(lower)) return 'sysinfo';
     if (/deschide.*folder|deschide.*notepad|deschide.*chrome|deschide.*url|deschide.*aplicați|open.*folder/.test(lower)) return 'launcher';
     if (/mergi pe|deschide site|navigheaz|comand[aă].*pe|caut[aă].*pe.*web|completea.*formular|browser|web.*agent|automat.*web|wolt|uber.*eats|booking\.com|ryanair|emag|amazon/.test(lower)) return 'web-agent';
+    if (/\bemail\b|\bmail\b|trimite.*email|citește.*email|inbox|mesaj.*email|send.*email|compose.*email|check.*mail/i.test(lower)) return 'email';
     if (/instale[aă]z[aă]|configurea|setup.*environment|verifică.*și.*repar|install.*pachet|npm.*install.*-g|verific[aă].*versiune|ce versiune|versiunea de|node.*version|npm.*version|python.*version|update[aă]z[aă].*pachet|dezinstale[aă]z[aă]|uninstall/i.test(lower)) return 'terminal-task';
     if (/execut[aă].*local|rulea.*pe pc|comand[aă].*local|local.*exec|pe pc|pe local|pe computer|deschide.*pe.*pc|rulează.*local/.test(lower)) return 'local-exec';
     if (/(?<!\bvs\s)\bcod(?!e[\s.])|fix\b|bug|refactor|review.*pr|analize.*cod|implementea|debug/.test(lower)) return 'coding';
@@ -432,7 +444,8 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
     const sysinfoData = extractJSON(responseText, 'SYSINFO_JSON');
     const launcherData = extractJSON(responseText, 'LAUNCHER_JSON');
     const terminalTaskData = extractJSON(responseText, 'TERMINAL_TASK_JSON');
-    const intent = detectIntent(userMessage, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData, localExecData, screenshotData, clipboardData, filesystemData, sysinfoData, launcherData, codingLoopData, terminalTaskData);
+    const emailData = extractJSON(responseText, 'EMAIL_JSON');
+    const intent = detectIntent(userMessage, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData, localExecData, screenshotData, clipboardData, filesystemData, sysinfoData, launcherData, codingLoopData, terminalTaskData, emailData);
 
     // Clean response
     responseText = cleanAllTags(responseText);
@@ -449,6 +462,7 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
     let webAgentResult = null;
     let localExecResult = null;
     let terminalTaskResult = null;
+    let emailResult = null;
 
     // Process booking
     if (bookingData && bookingData.guestName && bookingData.checkIn && bookingData.checkOut) {
@@ -739,6 +753,17 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
         }
     }
 
+    // Process Email action via AgentMail
+    if (emailData) {
+        try {
+            emailResult = await executeEmailAction(emailData);
+            console.log('[Orchestrator] Email action:', emailData.action, '→', JSON.stringify(emailResult).substring(0, 200));
+        } catch (err) {
+            console.error('[Orchestrator] Email error:', err.message);
+            emailResult = { error: err.message };
+        }
+    }
+
     // Process Web Agent action
     if (webAgentData) {
         try {
@@ -813,7 +838,8 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
         process: processResult,
         webAgent: webAgentResult,
         localExec: localExecResult,
-        terminalTask: terminalTaskResult
+        terminalTask: terminalTaskResult,
+        email: emailResult
     };
 }
 

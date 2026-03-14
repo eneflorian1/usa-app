@@ -11,6 +11,7 @@
     "@google/genai": "^1.43.0",
     "@google/generative-ai": "^0.24.1",
     "@modelcontextprotocol/sdk": "^1.27.1",
+    "agentmail": "^0.4.6",
     "body-parser": "^2.2.2",
     "cors": "^2.8.5",
     "croner": "^10.0.1",

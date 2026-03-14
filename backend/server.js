@@ -14,6 +14,7 @@ const ugcAgent = require('./ugcAgentService');
 const ugcVideoAgent = require('./ugcVideoAgentService');
 const ugcProductService = require('./ugcProductService');
 const crypto = require('crypto');
+const emailService = require('./emailService');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -2146,6 +2147,86 @@ app.delete('/api/ugc-product/:id/generations/:genId', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ===================== EMAIL / AGENTMAIL ROUTES =====================
+
+app.get('/api/settings/agentmail', async (req, res) => {
+  try {
+    const setting = await Setting.findOne({ key: 'agentmail_api_key' });
+    if (!setting || !setting.value) return res.json({ apiKey: null });
+    const val = setting.value;
+    const masked = val.length > 10 ? '...'.concat(val.slice(-10)) : val;
+    res.json({ apiKey: masked });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/settings/agentmail', async (req, res) => {
+  try {
+    const { apiKey } = req.body;
+    if (!apiKey) return res.status(400).json({ error: 'API Key is required' });
+    await Setting.findOneAndUpdate(
+      { key: 'agentmail_api_key' },
+      { value: apiKey, updatedAt: Date.now() },
+      { upsert: true, new: true }
+    );
+    emailService.resetClient();
+    res.json({ message: 'AgentMail API Key updated' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Inbox management
+app.get('/api/email/inboxes', async (req, res) => {
+  try {
+    const inboxes = await emailService.listInboxes();
+    res.json(inboxes);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/email/inboxes', async (req, res) => {
+  try {
+    const inbox = await emailService.createInbox(req.body);
+    res.status(201).json(inbox);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/email/inboxes/:inboxId', async (req, res) => {
+  try {
+    const inbox = await emailService.getInbox(req.params.inboxId);
+    res.json(inbox);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/email/inboxes/:inboxId', async (req, res) => {
+  try {
+    await emailService.deleteInbox(req.params.inboxId);
+    res.json({ message: 'Inbox deleted' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Messages
+app.get('/api/email/inboxes/:inboxId/messages', async (req, res) => {
+  try {
+    const result = await emailService.listMessages(req.params.inboxId, {
+      limit: parseInt(req.query.limit) || 20,
+      pageToken: req.query.pageToken || undefined
+    });
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/email/inboxes/:inboxId/messages/:messageId', async (req, res) => {
+  try {
+    const msg = await emailService.getMessage(req.params.inboxId, req.params.messageId);
+    res.json(msg);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/email/inboxes/:inboxId/send', async (req, res) => {
+  try {
+    const result = await emailService.sendEmail(req.params.inboxId, req.body);
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ===================== LOCAL EXEC ROUTES =====================

@@ -3,7 +3,7 @@
 import { useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Settings, MessageCircle, Home, BarChart2, Bell, Brain, CalendarCheck, Calendar, Eye, Box, Timer, Globe, Camera, Clapperboard, Package, TerminalSquare, Code2 } from 'lucide-react';
+import { Settings, MessageCircle, Home, BarChart2, Bell, Brain, CalendarCheck, Calendar, Eye, Box, Timer, Globe, Camera, Clapperboard, Package, TerminalSquare, Code2, Mail } from 'lucide-react';
 
 const navItems = [
   { href: '/', icon: Home, label: 'Home', showOnMobile: true },
@@ -19,6 +19,7 @@ const navItems = [
   { href: '/ugc-video', icon: Clapperboard, label: 'UGC Video', showOnMobile: false },
   { href: '/ugc-product', icon: Package, label: 'UGC Product', showOnMobile: false },
   { href: '/whatsapp', icon: MessageCircle, label: 'WhatsApp', showOnMobile: false },
+  { href: '/email', icon: Mail, label: 'Email', showOnMobile: false },
   { href: '/analytics', icon: BarChart2, label: 'Analytics', showOnMobile: false },
   { href: '/notifications', icon: Bell, label: 'Alerts', showOnMobile: false },
   { href: '/calendar', icon: Calendar, label: 'Calendar', showOnMobile: true },
