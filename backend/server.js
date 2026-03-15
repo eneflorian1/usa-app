@@ -17,6 +17,7 @@ const crypto = require('crypto');
 const emailService = require('./emailService');
 const emailAgent = require('./emailAgentService');
 const linkProcessor = require('./linkProcessorService');
+const gitAppsService = require('./gitAppsService');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -216,6 +217,41 @@ const ProjectMemorySchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }
 });
 const ProjectMemory = mongoose.model('ProjectMemory', ProjectMemorySchema);
+
+// ─── Git Apps Schemas ─────────────────────────────────────────────────────────
+
+const GitRepoSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  fullName: { type: String, default: '' },       // owner/name on GitHub
+  githubUrl: { type: String, default: '' },
+  cloneUrl: { type: String, default: '' },
+  description: { type: String, default: '' },
+  isPrivate: { type: Boolean, default: false },
+  language: { type: String, default: '' },
+  localPath: { type: String, default: '' },      // path on user's PC
+  status: { type: String, enum: ['remote_only', 'cloned', 'clone_error'], default: 'remote_only' },
+  defaultBranch: { type: String, default: 'main' },
+  lastTask: { type: String, default: '' },
+  lastError: { type: String, default: '' },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+});
+const GitRepo = mongoose.model('GitRepo', GitRepoSchema);
+
+const GitRepoTaskSchema = new mongoose.Schema({
+  repoId: { type: mongoose.Schema.Types.ObjectId, ref: 'GitRepo', required: true },
+  repoName: { type: String, default: '' },
+  taskType: { type: String, enum: ['task', 'agent', 'llm_update', 'commit', 'pull'], default: 'task' },
+  task: { type: String, required: true },
+  status: { type: String, enum: ['running', 'done', 'error'], default: 'running' },
+  output: { type: String, default: '' },
+  summary: { type: String, default: '' },
+  createdAt: { type: Date, default: Date.now },
+  completedAt: { type: Date, default: null }
+});
+const GitRepoTask = mongoose.model('GitRepoTask', GitRepoTaskSchema);
+
+// ─── End Git Apps Schemas ─────────────────────────────────────────────────────
 
 const WebAgentSessionSchema = new mongoose.Schema({
   task: { type: String, required: true },
@@ -2579,6 +2615,163 @@ app.get('/api/coding/projects', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GIT APPS ROUTES
+// ─────────────────────────────────────────────────────────────────────────────
+
+// List all repos
+app.get('/api/git-apps/repos', async (req, res) => {
+  try {
+    const repos = await gitAppsService.list_repos();
+    res.json(repos);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Create a new GitHub repo
+app.post('/api/git-apps/repos', async (req, res) => {
+  try {
+    const { name, description, isPrivate } = req.body;
+    if (!name) return res.status(400).json({ error: 'name is required' });
+    const result = await gitAppsService.create_repo(name, description || '', isPrivate || false);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Clone a repo onto local PC
+app.post('/api/git-apps/clone', async (req, res) => {
+  try {
+    const { cloneUrl, localPath, repoId } = req.body;
+    if (!cloneUrl || !localPath) return res.status(400).json({ error: 'cloneUrl and localPath required' });
+    const result = await gitAppsService.clone_repo(cloneUrl, localPath, repoId || null);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete a repo
+app.delete('/api/git-apps/repos/:id', async (req, res) => {
+  try {
+    const { alsoDeleteRemote } = req.query;
+    const result = await gitAppsService.delete_repo(req.params.id, alsoDeleteRemote === 'true');
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get repo metadata (git status, branch, commits)
+app.get('/api/git-apps/repos/:id/metadata', async (req, res) => {
+  try {
+    const result = await gitAppsService.repo_metadata(req.params.id);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update repo (git pull)
+app.post('/api/git-apps/repos/:id/update', async (req, res) => {
+  try {
+    const result = await gitAppsService.update_repo(req.params.id);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Commit changes
+app.post('/api/git-apps/repos/:id/commit', async (req, res) => {
+  try {
+    const { message } = req.body;
+    if (!message) return res.status(400).json({ error: 'commit message required' });
+    const result = await gitAppsService.commit_changes(req.params.id, message);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Run a task (Claude CLI on local PC)
+app.post('/api/git-apps/repos/:id/task', async (req, res) => {
+  try {
+    const { task } = req.body;
+    if (!task) return res.status(400).json({ error: 'task is required' });
+    const doc = await gitAppsService.run_task(req.params.id, task);
+    res.json(doc);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Run repo agent (autonomous Claude CLI agent)
+app.post('/api/git-apps/repos/:id/agent', async (req, res) => {
+  try {
+    const { task } = req.body;
+    if (!task) return res.status(400).json({ error: 'task is required' });
+    const doc = await gitAppsService.run_repo_agent(req.params.id, task);
+    res.json(doc);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update code from LLM (Anthropic API analysis)
+app.post('/api/git-apps/repos/:id/update-code', async (req, res) => {
+  try {
+    const { task } = req.body;
+    if (!task) return res.status(400).json({ error: 'task is required' });
+    const doc = await gitAppsService.update_code_from_llm(req.params.id, task);
+    res.json(doc);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// List tasks for a repo
+app.get('/api/git-apps/repos/:id/tasks', async (req, res) => {
+  try {
+    const tasks = await GitRepoTask.find({ repoId: req.params.id }).sort({ createdAt: -1 }).limit(50).lean();
+    res.json(tasks);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get a single task by ID
+app.get('/api/git-apps/tasks/:taskId', async (req, res) => {
+  try {
+    const task = await GitRepoTask.findById(req.params.taskId).lean();
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    res.json(task);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update repo record (name, description, localPath etc.)
+app.patch('/api/git-apps/repos/:id', async (req, res) => {
+  try {
+    const allowed = ['name', 'description', 'localPath', 'language', 'defaultBranch'];
+    const update = {};
+    for (const key of allowed) {
+      if (req.body[key] !== undefined) update[key] = req.body[key];
+    }
+    update.updatedAt = new Date();
+    const repo = await GitRepo.findByIdAndUpdate(req.params.id, update, { new: true });
+    if (!repo) return res.status(404).json({ error: 'Repo not found' });
+    res.json(repo);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── End Git Apps Routes ──────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
   console.log(`Backend server is running on http://localhost:${PORT}`);

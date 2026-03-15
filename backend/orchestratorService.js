@@ -8,6 +8,7 @@ const { executeProcessAction } = require('./processManagerService');
 const { executeWebAgentAction } = require('./webAgentService');
 const { executeEmailAction } = require('./emailService');
 const linkProcessor = require('./linkProcessorService');
+const { executeGitAppAction } = require('./gitAppsService');
 const os = require('os');
 
 /**
@@ -61,6 +62,22 @@ Pentru CODING COMPLEX (implementare feature, fix bug, refactor — multi-pas aut
 - Folosește CODING_LOOP_JSON când: implementare feature, fix bug complex, refactor, orice necesită citire+scriere cod
 - project = numele folderului din C:\\Users\\Admin\\Documents\\GitHub\\
 - Agentul va citi codul, va face modificări, va testa, va commit și push AUTOMAT
+
+Pentru GIT APPS (management proiecte Git — creare repos, clone, task-uri AI pe cod, commit, metadata):
+<GIT_APP_JSON>{"action":"list_repos"}</GIT_APP_JSON>
+<GIT_APP_JSON>{"action":"create_repo","name":"new-project","description":"Descriere","private":false}</GIT_APP_JSON>
+<GIT_APP_JSON>{"action":"clone_repo","url":"https://github.com/user/repo.git","localPath":"C:\\Users\\Admin\\Documents\\GitHub\\repo"}</GIT_APP_JSON>
+<GIT_APP_JSON>{"action":"repo_metadata","repoId":"<id>"}</GIT_APP_JSON>
+<GIT_APP_JSON>{"action":"update_repo","repoId":"<id>"}</GIT_APP_JSON>
+<GIT_APP_JSON>{"action":"commit_changes","repoId":"<id>","message":"feat: add new feature"}</GIT_APP_JSON>
+<GIT_APP_JSON>{"action":"run_task","repoId":"<id>","task":"Adaugă dark mode toggle"}</GIT_APP_JSON>
+<GIT_APP_JSON>{"action":"run_repo_agent","repoId":"<id>","task":"Refactorizează și optimizează codul"}</GIT_APP_JSON>
+<GIT_APP_JSON>{"action":"update_code_from_llm","repoId":"<id>","task":"Adaugă autentificare JWT"}</GIT_APP_JSON>
+<GIT_APP_JSON>{"action":"delete_repo","repoId":"<id>","alsoDeleteRemote":false}</GIT_APP_JSON>
+- Folosește pentru: "listează proiectele", "creează repo", "clonează", "rulează task pe proiect", "commit", "git pull"
+- run_task → Claude CLI execută task pe PC-ul local (pentru implementări complexe)
+- run_repo_agent → Agent autonom cu context complet al proiectului
+- update_code_from_llm → Anthropic API analizează și sugerează modificări
 
 Pentru GH-ISSUES (auto-fix issues de pe GitHub):
 <GH_ISSUES_JSON>{"action":"analyze","owner":"eneflorian1","repo":"usa-app","issue":1}</GH_ISSUES_JSON>
@@ -369,6 +386,7 @@ function cleanAllTags(text) {
         .replace(/<TERMINAL_TASK_JSON>[\s\S]*?<\/TERMINAL_TASK_JSON>/g, '')
         .replace(/<EMAIL_JSON>[\s\S]*?<\/EMAIL_JSON>/g, '')
         .replace(/<LINK_PROCESSOR_JSON>[\s\S]*?<\/LINK_PROCESSOR_JSON>/g, '')
+        .replace(/<GIT_APP_JSON>[\s\S]*?<\/GIT_APP_JSON>/g, '')
         .trim();
 }
 
@@ -473,6 +491,7 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
     const terminalTaskData = extractJSON(responseText, 'TERMINAL_TASK_JSON');
     const emailData = extractJSON(responseText, 'EMAIL_JSON');
     const linkProcessorData = extractJSON(responseText, 'LINK_PROCESSOR_JSON');
+    const gitAppData = extractJSON(responseText, 'GIT_APP_JSON');
     const intent = detectIntent(userMessage, bookingData, taskData, escalateData, githubData, cronData, codingData, ghIssuesData, processData, webAgentData, localExecData, screenshotData, clipboardData, filesystemData, sysinfoData, launcherData, codingLoopData, terminalTaskData, emailData, linkProcessorData);
 
     // Clean response
@@ -490,6 +509,7 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
     let webAgentResult = null;
     let localExecResult = null;
     let terminalTaskResult = null;
+    let gitAppResult = null;
     let emailResult = null;
     let linkProcessorResult = null;
 
@@ -937,6 +957,17 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
         }
     }
 
+    // Process Git App action
+    if (gitAppData && gitAppData.action) {
+        try {
+            gitAppResult = await executeGitAppAction(gitAppData);
+            console.log('[Orchestrator] GitApp action:', gitAppData.action, '→', JSON.stringify(gitAppResult).substring(0, 200));
+        } catch (err) {
+            console.error('[Orchestrator] GitApp error:', err.message);
+            gitAppResult = { error: err.message };
+        }
+    }
+
     // 6. Save to history
     chat.messages.push({ role: 'user', content: userMessage });
     chat.messages.push({ role: 'model', content: responseText });
@@ -961,7 +992,8 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
         localExec: localExecResult,
         terminalTask: terminalTaskResult,
         email: emailResult,
-        linkProcessor: linkProcessorResult
+        linkProcessor: linkProcessorResult,
+        gitApp: gitAppResult
     };
 }
 
