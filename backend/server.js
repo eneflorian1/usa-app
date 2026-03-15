@@ -2633,8 +2633,22 @@ app.get('/api/git-apps/repos', async (req, res) => {
 // Create a new GitHub repo
 app.post('/api/git-apps/repos', async (req, res) => {
   try {
-    const { name, description, isPrivate } = req.body;
+    const { name, description, isPrivate, localOnly, localPath } = req.body;
     if (!name) return res.status(400).json({ error: 'name is required' });
+
+    if (localOnly) {
+      // Create repo only in DB (no GitHub API needed)
+      const repo = await GitRepo.create({
+        name,
+        description: description || '',
+        isPrivate: isPrivate || false,
+        localPath: localPath || '',
+        status: localPath ? 'cloned' : 'remote_only',
+        defaultBranch: 'main'
+      });
+      return res.json({ repo });
+    }
+
     const result = await gitAppsService.create_repo(name, description || '', isPrivate || false);
     res.json(result);
   } catch (err) {

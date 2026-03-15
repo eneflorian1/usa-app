@@ -123,7 +123,10 @@ export default function AplicatiiGitPage() {
     const [newName, setNewName] = useState('');
     const [newDesc, setNewDesc] = useState('');
     const [newPrivate, setNewPrivate] = useState(false);
+    const [newLocalPath, setNewLocalPath] = useState('');
+    const [createMode, setCreateMode] = useState<'github' | 'local'>('github');
     const [creating, setCreating] = useState(false);
+    const [createError, setCreateError] = useState('');
 
     // Clone form
     const [cloneUrl, setCloneUrl] = useState('');
@@ -222,20 +225,31 @@ export default function AplicatiiGitPage() {
     async function handleCreate() {
         if (!newName.trim() || creating) return;
         setCreating(true);
+        setCreateError('');
         try {
             const res = await fetch('/api/git-apps/repos', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: newName.trim(), description: newDesc, isPrivate: newPrivate })
+                body: JSON.stringify({
+                    name: newName.trim(),
+                    description: newDesc,
+                    isPrivate: newPrivate,
+                    localOnly: createMode === 'local',
+                    localPath: newLocalPath.trim() || undefined
+                })
             });
             const data = await res.json();
             if (data.repo) {
                 setShowCreateModal(false);
-                setNewName(''); setNewDesc(''); setNewPrivate(false);
+                setNewName(''); setNewDesc(''); setNewPrivate(false); setNewLocalPath(''); setCreateError('');
                 await loadRepos();
                 selectRepo(data.repo);
+            } else {
+                setCreateError(data.error || 'Eroare necunoscută');
             }
-        } catch { }
+        } catch (err: unknown) {
+            setCreateError(err instanceof Error ? err.message : 'Eroare de rețea');
+        }
         setCreating(false);
     }
 
@@ -646,12 +660,39 @@ export default function AplicatiiGitPage() {
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
                     <div className="bg-white dark:bg-zinc-900 rounded-2xl border border-gray-200 dark:border-zinc-800 p-6 w-full max-w-md space-y-4">
                         <h3 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
-                            <Plus size={18} className="text-emerald-500" /> Repo Nou GitHub
+                            <Plus size={18} className="text-emerald-500" /> Repo Nou
                         </h3>
+
+                        {/* GitHub / Local tabs */}
+                        <div className="flex gap-1 p-1 bg-gray-100 dark:bg-zinc-800 rounded-xl">
+                            <button
+                                type="button"
+                                onClick={() => setCreateMode('github')}
+                                className={`flex-1 text-xs py-1.5 rounded-lg font-medium transition-colors ${createMode === 'github' ? 'bg-white dark:bg-zinc-700 text-gray-900 dark:text-white shadow-sm' : 'text-gray-500 dark:text-gray-400'}`}
+                            >
+                                🌐 GitHub
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setCreateMode('local')}
+                                className={`flex-1 text-xs py-1.5 rounded-lg font-medium transition-colors ${createMode === 'local' ? 'bg-white dark:bg-zinc-700 text-gray-900 dark:text-white shadow-sm' : 'text-gray-500 dark:text-gray-400'}`}
+                            >
+                                💻 Local
+                            </button>
+                        </div>
+
+                        {createMode === 'github' && (
+                            <p className="text-xs text-gray-400">Creează repo pe GitHub (necesită token configurat în Settings)</p>
+                        )}
+                        {createMode === 'local' && (
+                            <p className="text-xs text-gray-400">Înregistrează un proiect local fără GitHub API</p>
+                        )}
+
                         <input
                             type="text"
                             value={newName}
                             onChange={e => setNewName(e.target.value)}
+                            onKeyDown={e => e.key === 'Enter' && handleCreate()}
                             placeholder="Numele repo-ului"
                             className="w-full bg-gray-50 dark:bg-zinc-800 rounded-xl px-3 py-2 text-sm border border-gray-200 dark:border-zinc-700 text-gray-900 dark:text-white outline-none focus:border-emerald-400"
                         />
@@ -662,19 +703,37 @@ export default function AplicatiiGitPage() {
                             rows={2}
                             className="w-full resize-none bg-gray-50 dark:bg-zinc-800 rounded-xl px-3 py-2 text-sm border border-gray-200 dark:border-zinc-700 text-gray-900 dark:text-white outline-none focus:border-emerald-400"
                         />
+                        {createMode === 'local' && (
+                            <input
+                                type="text"
+                                value={newLocalPath}
+                                onChange={e => setNewLocalPath(e.target.value)}
+                                placeholder="Cale locală (opțional): C:\Users\..."
+                                className="w-full bg-gray-50 dark:bg-zinc-800 rounded-xl px-3 py-2 text-sm border border-gray-200 dark:border-zinc-700 text-gray-900 dark:text-white outline-none focus:border-emerald-400 font-mono"
+                            />
+                        )}
                         <label className="flex items-center gap-2 cursor-pointer">
                             <input type="checkbox" checked={newPrivate} onChange={e => setNewPrivate(e.target.checked)} className="rounded" />
                             <span className="text-sm text-gray-700 dark:text-gray-300 flex items-center gap-1"><Lock size={13} /> Privat</span>
                         </label>
+
+                        {createError && (
+                            <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl px-3 py-2">
+                                <p className="text-xs text-red-700 dark:text-red-400">{createError}</p>
+                            </div>
+                        )}
+
                         <div className="flex gap-2">
                             <button
-                                onClick={() => setShowCreateModal(false)}
+                                type="button"
+                                onClick={() => { setShowCreateModal(false); setCreateError(''); }}
                                 className="flex-1 py-2 text-sm rounded-xl border border-gray-200 dark:border-zinc-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-zinc-800"
                             >Anulează</button>
                             <button
+                                type="button"
                                 onClick={handleCreate}
                                 disabled={!newName.trim() || creating}
-                                className="flex-1 py-2 text-sm rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-200 dark:disabled:bg-zinc-700 text-white font-medium"
+                                className="flex-1 py-2 text-sm rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-200 dark:disabled:bg-zinc-700 disabled:text-gray-400 text-white font-medium transition-colors"
                             >{creating ? 'Se creează...' : 'Creează'}</button>
                         </div>
                     </div>
