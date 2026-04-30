@@ -1,0 +1,201 @@
+# Coding Agent + GH-Issues + Process Manager — Implementation Plan
+
+Implementare combinată a celor 3 skill-uri rămase, adaptate pentru Windows și arhitectura usa-app.
+
+> [!IMPORTANT]
+> **tmux nu există pe Windows**. Înlocuim cu un `processManagerService.js` care folosește `child_process.spawn()` pentru a gestiona procese background — aceeași funcționalitate, fără dependența tmux.
+
+## Arhitectură
+
+```
+Utilizator (voce/chat)
+     │
+     ▼
+Orchestrator / Glasses Gateway
+     │ detectează intent coding/gh-issues
+     ▼
+┌─────────────────────────┐
+│  codingAgentService.js  │ ← Delegă task-uri de cod către Gemini API
+│                         │   (sub-agent cu context de cod)
+└──────────┬──────────────┘
+           │ folosește
+           ▼
+┌─────────────────────────┐
+│ processManagerService.js│ ← Gestionează procese background
+│  (înlocuiește tmux)     │   spawn, monitor, kill, logs
+└──────────┬──────────────┘
+           │ folosește
+           ▼
+┌─────────────────────────┐
+│  ghIssuesService.js     │ ← Auto-fix flow: fetch issues → coding agent → PR
+│                         │   Folosește githubService + codingAgentService
+└─────────────────────────┘
+```
+
+---
+
+## Proposed Changes
+
+### 1. Process Manager (înlocuiește tmux)
+
+#### [NEW] [processManagerService.js](file:///c:/Users/Admin/Documents/GitHub/usa-app/backend/processManagerService.js)
+
+Session manager care rulează procese în background cu `child_process.spawn()`.
+
+| Funcție | Ce face |
+|---|---|
+| `spawnProcess(command, options)` | Lansează proces background, returnează `sessionId` |
+| `getProcess(sessionId)` | Status proces (running/done/error) |
+| `getProcessLog(sessionId, tail)` | Ultimele N linii de output |
+| `sendInput(sessionId, input)` | Trimite text la stdin |
+| `killProcess(sessionId)` | Oprește procesul |
+| `listProcesses()` | Listează toate sesiunile active/recente |
+| `cleanupOld()` | Curăță sesiuni vechi (auto, la 30 min) |
+
+- Stochează output într-un buffer circular (ultimele 500 linii per sesiune)
+- Sesiunile suportă: cwd, timeout, env vars
+- Cleanup automat la 2 ore
+- Folosește `child_process.spawn()` (nu `node-pty` — mai simplu, fără compilare nativă)
+
+---
+
+### 2. Coding Agent
+
+#### [NEW] [codingAgentService.js](file:///c:/Users/Admin/Documents/GitHub/usa-app/backend/codingAgentService.js)
+
+Agent AI care analizează cod și execută modificări. **Nu** lansează un CLI extern (Codex/Claude) — folosește **Gemini API direct** ca sub-agent cu context de cod.
+
+| Funcție | Ce face |
+|---|---|
+| `analyzeCode(filePath)` | Citește un fișier și returnează analiza |
+| `executeTask(task)` | Primește un task de cod → Gemini generează fix → aplică |
+| `reviewPR(owner, repo, prNumber)` | Descarcă diff PR → Gemini face review |
+| `runCommand(command, cwd)` | Rulează comandă (npm test, etc.) prin processManager |
+| `getTaskStatus(taskId)` | Status task în progres |
+
+**Flow intern `executeTask()`:**
+```
+1. Primește: { description, targetFiles, workDir }
+2. Citește fișierele relevante (fs.readFile)
+3. Construiește prompt specialist pentru Gemini:
+   "Ești un coding agent. Analizează codul și generează fix-ul."
+4. Gemini returnează codul modificat în format diff/patch
+5. Aplică modificările pe fișiere
+6. Opțional: rulează teste (npm test) prin processManager
+7. Returnează: { success, filesChanged, diff, testResults }
+```
+
+> [!NOTE]
+> **De ce Gemini API și nu CLI extern?** Codex CLI și Claude Code necesită setup complex, API keys separate, și nu sunt garantat instalate. Gemini e deja configurat în proiect. Pattern-ul este identic — doar delivery-ul e diferit.
+
+---
+
+### 3. GH-Issues Auto-Fix
+
+#### [NEW] [ghIssuesService.js](file:///c:/Users/Admin/Documents/GitHub/usa-app/backend/ghIssuesService.js)
+
+Adaptare simplificată a flow-ului OpenClaw `gh-issues` (6 faze → 4 faze).
+
+| Funcție | Ce face |
+|---|---|
+| `autoFixIssue(owner, repo, issueNumber)` | Fix complet: analyze → branch → fix → commit → push → PR |
+| `analyzeIssue(owner, repo, issueNumber)` | Evaluează dacă issue-ul e rezolvabil (confidence 1-10) |
+| `batchFixIssues(owner, repo, options)` | Fetch issues → fix multiple secvențial |
+| `getFixStatus(taskId)` | Status fix în progres |
+
+**Flow `autoFixIssue()`:**
+```
+Phase 1: Fetch issue details (githubService)
+Phase 2: Confidence check — Gemini evaluează dacă poate rezolva
+Phase 3: Fix — codingAgentService.executeTask()
+Phase 4: Git operations — branch, commit, push, create PR (via processManager + githubService)
+```
+
+---
+
+### 4. Orchestrator Integration
+
+#### [MODIFY] [orchestratorService.js](file:///c:/Users/Admin/Documents/GitHub/usa-app/backend/orchestratorService.js)
+
+Adaugă 2 tag-uri noi:
+
+```
+Pentru CODING (task-uri de cod):
+<CODING_JSON>{"task":"describe fix","targetFiles":["server.js"],"workDir":"."}</CODING_JSON>
+
+Pentru GH-ISSUES (auto-fix issues de pe GitHub):
+<GH_ISSUES_JSON>{"action":"auto_fix","owner":"eneflorian1","repo":"usa-app","issue":42}</GH_ISSUES_JSON>
+<GH_ISSUES_JSON>{"action":"analyze","owner":"eneflorian1","repo":"usa-app","issue":42}</GH_ISSUES_JSON>
+
+Pentru PROCESS (management procese background):
+<PROCESS_JSON>{"action":"list"}</PROCESS_JSON>
+<PROCESS_JSON>{"action":"status","sessionId":"abc123"}</PROCESS_JSON>
+<PROCESS_JSON>{"action":"log","sessionId":"abc123","tail":20}</PROCESS_JSON>
+<PROCESS_JSON>{"action":"kill","sessionId":"abc123"}</PROCESS_JSON>
+```
+
+#### [MODIFY] [glassesGatewayService.js](file:///c:/Users/Admin/Documents/GitHub/usa-app/backend/glassesGatewayService.js)
+
+Adaugă aceleași tag-uri (`CODING_JSON`, `GH_ISSUES_JSON`, `PROCESS_JSON`).
+
+---
+
+### 5. Server Routes
+
+#### [MODIFY] [server.js](file:///c:/Users/Admin/Documents/GitHub/usa-app/backend/server.js)
+
+**Process Manager routes:**
+- `GET /api/processes` — listează procese
+- `GET /api/processes/:id` — status + log
+- `POST /api/processes/:id/input` — send input
+- `DELETE /api/processes/:id` — kill
+
+**Coding Agent routes:**
+- `POST /api/coding/task` — lansează task de cod
+- `POST /api/coding/review` — review PR
+- `GET /api/coding/task/:id` — status task
+
+**GH-Issues routes:**
+- `POST /api/github/auto-fix/:owner/:repo/:number` — auto-fix un issue
+- `POST /api/github/analyze-issue/:owner/:repo/:number` — confidence check
+- `POST /api/github/batch-fix/:owner/:repo` — batch fix
+
+---
+
+## Verification Plan
+
+### Automated
+```bash
+# 1. Process Manager
+curl -X POST http://localhost:5000/api/processes -d '{"command":"echo hello"}'
+curl http://localhost:5000/api/processes
+
+# 2. Coding Agent — analyze a file
+curl -X POST http://localhost:5000/api/coding/task -d '{"task":"Add a comment to the top of server.js","targetFiles":["server.js"]}'
+
+# 3. GH-Issues — analyze
+curl -X POST http://localhost:5000/api/github/analyze-issue/eneflorian1/usa-app/1
+
+# 4. Via orchestrator
+curl -X POST http://localhost:5000/api/orchestrator/chat -d '{"message":"Analizează issue-ul #1 de pe GitHub și spune-mi dacă se poate repara automat"}'
+```
+
+### Manual
+- Verifică logurile `[ProcessMgr]`, `[CodingAgent]`, `[GH-Issues]` în consolă
+- Testează din chat orchestrator cu comenzi naturale
+======================================
+
+Ce s-a creat:
+
+Serviciu	Fișier	Ce face
+GitHub	githubService.js	Issues, PRs, CI, repo info via REST API
+Process Manager	processManagerService.js	Spawn/monitor/kill procese background (înlocuiește tmux)
+Coding Agent	codingAgentService.js	Analiză cod, generare fix-uri, PR review — via Gemini API
+GH-Issues Auto-Fix	ghIssuesService.js	Analyze → branch → fix → commit → push → create PR
+Tag-uri noi în orchestrator + glasses gateway: GITHUB_JSON, CODING_JSON, GH_ISSUES_JSON, PROCESS_JSON
+
+35+ endpoint-uri API noi în server.js
+
+Verificare: node --check server.js ✅ + toate modulele se încarcă corect ✅
+
+Pentru a testa live, pornește serverul și configurează GitHub token-ul din Settings.

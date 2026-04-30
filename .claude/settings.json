@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s \"http://155.117.45.192:3004/books/test-bridge-azbook-smoke\" -o /dev/null -w \"HTTP %{http_code}\\\\n\")",
+      "Bash(curl -s \"http://155.117.45.192:3004/api/publish\" -X POST -H \"Content-Type: application/json\" -d '{\"type\":\"ping\"}' -w \"\\\\nHTTP %{http_code}\\\\n\")",
+      "Bash(curl -s \"http://155.117.45.192:3004/books\")",
+      "Bash(curl -s -X POST http://155.117.45.192:3004/api/publish -H 'Content-Type: application/json' -d '{ *)",
+      "Bash(curl -s \"http://155.117.45.192:3004/books/test-bridge-azbook-smoke\")",
+      "Bash(curl -s \"http://155.117.45.192:3004/\")",
+      "Bash(curl -s -X POST \"http://155.117.45.192:3004/api/publish\" -H \"Content-Type: application/json; charset=utf-8\" --data-binary @/c/Users/Admin/AppData/Local/Temp/test-book.json)",
+      "Bash(grep -oE 'Capitol [12][^<]{0,15}')",
+      "Bash(curl -s \"http://155.117.45.192:3004/_next/static/css/fa0572003c019966.css\" -o /tmp/vps.css)",
+      "Read(//tmp/**)",
+      "Bash(curl -sI \"http://155.117.45.192:3004/_next/static/css/fa0572003c019966.css\")",
+      "Bash(curl -s \"http://155.117.45.192:3004/_next/static/css/fa0572003c019966.css\")",
+      "Bash(grep -oE '\\\\.hero-video__subtitle[^,{]*\\\\{[^}]*\\\\}' /tmp/vps.css)",
+      "Bash(curl -s \"http://155.117.45.192:3004/sw.js\")",
+      "Bash(grep -oE '\\\\.action-fab[^,{]*\\\\{[^}]*\\\\}' /tmp/vps.css)",
+      "Bash(grep -oE '\\\\.stat-item[^,{]*\\\\{[^}]*\\\\}' /tmp/vps.css)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\Admin\\AppData\\Local\\Temp"
+    ]
+  }
+}

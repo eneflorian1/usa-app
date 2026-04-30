@@ -1,0 +1,42 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
+    "@google/genai": "^1.43.0",
+    "@google/generative-ai": "^0.24.1",
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@whiskeysockets/baileys": "^6.7.16",
+    "agentmail": "^0.4.6",
+    "cheerio": "^1.0.0",
+    "cors": "^2.8.5",
+    "croner": "^10.0.1",
+    "dotenv": "^16.4.7",
+    "duck-duck-scrape": "^2.2.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^8.3.2",
+    "helmet": "^8.1.0",
+    "mongoose": "^8.10.1",
+    "node-pty": "^1.1.0",
+    "p-queue": "^8.0.0",
+    "playwright": "^1.58.2",
+    "puppeteer": "^22.0.0",
+    "puppeteer-core": "^22.0.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "qrcode": "^1.5.4",
+    "searxng": "^0.0.5",
+    "viem": "^2.47.6",
+    "whatsapp-web.js": "github:pedroslopez/whatsapp-web.js#main",
+    "ws": "^8.20.0",
+    "x402-fetch": "^1.1.0",
+    "bullmq": "^5.74.1",
+    "ioredis": "^5.10.1",
+    "cassandra-driver": "^4.8.0"
+  }
+}
