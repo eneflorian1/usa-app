@@ -5,7 +5,7 @@ const config: CapacitorConfig = {
   appName: 'Ilie Assistant',
   webDir: 'out',
   server: {
-    url: 'https://enef.site/orchestrator?mode=assistant',
+    url: 'https://enef.site/',
     cleartext: true
   }
 };
