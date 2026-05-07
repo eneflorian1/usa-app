@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import Navigation from "@/components/Navigation";
+import AlertsFABWrapper from "@/components/AlertsFABWrapper";
 import ErrorBoundary from "@/components/ErrorBoundary";
 
 const geistSans = Geist({
@@ -65,6 +66,7 @@ export default function RootLayout({
             </div>
           </main>
         </div>
+        <AlertsFABWrapper />
       </body>
     </html>
   );
