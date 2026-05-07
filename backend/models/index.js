@@ -34,6 +34,7 @@ require('./NegoLead');
 require('./NegoMission');
 require('./NegoMessage');
 require('./NegoConfig');
+require('./Profile');
 
 // Re-export all models for convenience
 module.exports = {
@@ -70,4 +71,5 @@ module.exports = {
   NegoMission: mongoose.model('NegoMission'),
   NegoMessage: mongoose.model('NegoMessage'),
   NegoConfig: mongoose.model('NegoConfig'),
+  Profile: mongoose.model('Profile'),
 };

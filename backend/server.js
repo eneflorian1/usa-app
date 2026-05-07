@@ -63,6 +63,8 @@ app.use('/api/local-exec', require('./routes/localExec'));
 app.use('/api/git-apps', require('./routes/gitApps'));
 app.use('/api/payments', require('./routes/payments'));
 app.use('/api/nego', require('./routes/nego'));
+app.use('/api/pm2', require('./routes/pm2'));
+app.use('/api/profile', require('./routes/profile'));
 
 // Glasses OpenAI-compatible endpoint (special path, not under /api/glasses)
 const glassesRoutes = require('./routes/glasses');
