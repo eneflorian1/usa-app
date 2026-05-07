@@ -3,19 +3,16 @@
 import { useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Settings, MessageCircle, Home, BarChart2, Bell, Brain, CalendarCheck, Calendar, Eye, Box, Timer, Globe, Camera, Clapperboard, Package, TerminalSquare, Code2, Mail, FolderGit2, Layers, CreditCard, Handshake, Map } from 'lucide-react';
+import { Settings, MessageCircle, Home, BarChart2, Bell, Brain, Calendar, Box, Timer, Globe, Camera, Clapperboard, Package, TerminalSquare, Code2, Mail, FolderGit2, CreditCard, Handshake, Map, ClipboardList } from 'lucide-react';
 
 const navItems = [
   { href: '/', icon: Home, label: 'Home', showOnMobile: true },
   { href: '/maps', icon: Map, label: 'Maps', showOnMobile: true },
   { href: '/orchestrator', icon: Brain, label: 'Command', showOnMobile: false },
-  { href: '/orchestrator-memory', icon: Layers, label: 'AI Memory', showOnMobile: true },
   { href: '/payments', icon: CreditCard, label: 'Payments', showOnMobile: false },
   { href: '/terminal', icon: TerminalSquare, label: 'Terminal', showOnMobile: false },
   { href: '/coding', icon: Code2, label: 'Coding', showOnMobile: false },
   { href: '/aplicatii-git', icon: FolderGit2, label: 'Git Apps', showOnMobile: false },
-  { href: '/glasses-memory', icon: Eye, label: 'Glasses', showOnMobile: true },
-  { href: '/planner', icon: CalendarCheck, label: 'Planner', showOnMobile: true },
   { href: '/cron-jobs', icon: Timer, label: 'Cron Jobs', showOnMobile: false },
   { href: '/house-objects', icon: Box, label: 'House', showOnMobile: false },
   { href: '/web-agent', icon: Globe, label: 'Web Agent', showOnMobile: false },
@@ -28,6 +25,7 @@ const navItems = [
   { href: '/analytics', icon: BarChart2, label: 'Analytics', showOnMobile: false },
   { href: '/notifications', icon: Bell, label: 'Alerts', showOnMobile: false },
   { href: '/calendar', icon: Calendar, label: 'Calendar', showOnMobile: false },
+  { href: '/agents', icon: ClipboardList, label: 'Agents', showOnMobile: true },
   { href: '/settings', icon: Settings, label: 'Settings', showOnMobile: true },
 ];
 
