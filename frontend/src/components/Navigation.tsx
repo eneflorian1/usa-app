@@ -3,11 +3,12 @@
 import { useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Settings, MessageCircle, Home, BarChart2, Bell, Brain, CalendarCheck, Calendar, Eye, Box, Timer, Globe, Camera, Clapperboard, Package, TerminalSquare, Code2, Mail, FolderGit2, Layers, CreditCard, Handshake } from 'lucide-react';
+import { Settings, MessageCircle, Home, BarChart2, Bell, Brain, CalendarCheck, Calendar, Eye, Box, Timer, Globe, Camera, Clapperboard, Package, TerminalSquare, Code2, Mail, FolderGit2, Layers, CreditCard, Handshake, Map } from 'lucide-react';
 
 const navItems = [
   { href: '/', icon: Home, label: 'Home', showOnMobile: true },
-  { href: '/orchestrator', icon: Brain, label: 'Command', showOnMobile: true },
+  { href: '/maps', icon: Map, label: 'Maps', showOnMobile: true },
+  { href: '/orchestrator', icon: Brain, label: 'Command', showOnMobile: false },
   { href: '/orchestrator-memory', icon: Layers, label: 'AI Memory', showOnMobile: true },
   { href: '/payments', icon: CreditCard, label: 'Payments', showOnMobile: false },
   { href: '/terminal', icon: TerminalSquare, label: 'Terminal', showOnMobile: false },
