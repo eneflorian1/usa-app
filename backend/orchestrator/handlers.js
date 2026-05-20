@@ -17,6 +17,9 @@ const { executePayment } = require('../x402PaymentService');
 const { executeSearxngSearch } = require('../searxngService');
 const { executeTerminalTask } = require('./terminalTask');
 const { callMcpTool, isBridgeConnected } = require('../mcpBridgeService');
+const { executeMessengerAction } = require('../messengerService');
+const { executeFileAction } = require('../fileAgentService');
+const { executeDocAction } = require('../documentService');
 
 // ─── Booking ────────────────────────────────────────────────────────────────
 
@@ -727,10 +730,179 @@ async function handleBookApp(data, intent) {
     }
 }
 
+// ── Lead Intelligence — search → analyze → score → draft ─────────────────
+
+async function handleLeadIntel(data) {
+    if (!data) return null;
+    const { url, urls, batch, chatId, userId, zone, query } = data;
+
+    try {
+        const { runLeadIntelligencePipeline, runBatchAnalysis } = require('../services/leadIntelligence');
+
+        // Batch mode: analyze all new negoapp leads
+        if (batch) {
+            const result = await runBatchAnalysis({ chatId, userId: userId || 'default', limit: data.limit || 5 });
+            return {
+                result,
+                responseOverride: `🔍 **Lead Intelligence — Batch complet**\nAnalizat: ${result.processed} lead-uri noi\n` +
+                    (result.results?.map(r => `  ${r.verdict === 'hot' ? '🔥' : r.verdict === 'warm' ? '🟡' : '❄️'} ${r.url?.substring(0, 60)} — ${r.score}/10`).join('\n') || '')
+            };
+        }
+
+        // Single URL
+        const targetUrl = url || (Array.isArray(urls) && urls[0]);
+        if (!targetUrl) {
+            return { result: null, responseOverride: '❌ Lead Intelligence: nu am primit un URL valid.' };
+        }
+
+        const result = await runLeadIntelligencePipeline({ url: targetUrl, chatId, userId: userId || 'default' });
+        const vc = result.score.verdict;
+        const verdictEmoji = vc === 'hot' ? '🔥' : vc === 'warm' ? '🟡' : '❄️';
+
+        return {
+            result,
+            responseOverride: [
+                `${verdictEmoji} **Lead Intelligence — ${result.listing.title}**`,
+                `💰 ${result.listing.price} ${result.listing.currency} · ${result.listing.location}`,
+                `📊 Evaluare: ${result.analysis.priceAssessment} | Negociere: ${result.analysis.negotiationRoom}`,
+                `⭐ Scor: ${result.score.score}/10 — ${result.score.scoreReason}`,
+                result.score.suggestedOffer ? `🎯 Ofertă sugerată: ${result.score.suggestedOffer} ${result.score.suggestedOfferCurrency}` : '',
+                `\n**Mesaj negociere draft:**\n${result.draftMessage}`,
+                result.leadCreated ? '\n✅ Lead creat în NegoApp' : '',
+                `\n🔗 ${targetUrl}`,
+            ].filter(Boolean).join('\n')
+        };
+    } catch (err) {
+        console.error('[Orchestrator] LeadIntel error:', err.message);
+        return { result: null, responseOverride: `❌ Lead Intelligence eroare: ${err.message}` };
+    }
+}
+
+// ── Geo Search — Geo Brain pipeline ──────────────────────────────────────
+
+async function handleGeoSearch(data, userMessage, chatId) {
+    if (!data && !userMessage) return null;
+    try {
+        const { processGeoRequest } = require('../services/geo/geoAgent');
+        const text = data?.query || data?.text || userMessage;
+        const opts = {
+            userId: data?.userId || 'default',
+            chatId: data?.chatId || chatId || null,
+        };
+        const result = await processGeoRequest(text, opts);
+        return {
+            result,
+            responseOverride: result.message || `✅ Geo Agent: ${result.intent} complet`,
+        };
+    } catch (err) {
+        console.error('[Orchestrator] GeoSearch error:', err.message);
+        return { result: null, responseOverride: `❌ Geo Agent eroare: ${err.message}` };
+    }
+}
+
+async function handleMessenger(data, sessionId) {
+    if (!data) return null;
+    try {
+        const result = await executeMessengerAction(data, sessionId);
+        const ch = data.channel === 'email' ? '📧' : '📱';
+        const dest = result?.to || result?.chatId || data.to || data.chatId || '';
+        const transcriptNote = data.attachTranscript ? ' (cu transcript)' : '';
+        console.log(`[Orchestrator] Messenger ${data.channel} → ${dest}${transcriptNote}`);
+        const attNames = result?.attachmentNames?.length ? ` • Atașamente: ${result.attachmentNames.join(', ')}` : '';
+        return {
+            result,
+            responseAppend: `\n${ch} Trimis pe ${data.channel}${dest ? ` către ${dest}` : ''}${transcriptNote}${attNames}.`
+        };
+    } catch (err) {
+        console.error('[Orchestrator] Messenger error:', err.message);
+        return { result: null, responseOverride: `❌ Messenger eroare: ${err.message}` };
+    }
+}
+
+async function handleFileAgent(data) {
+    if (!data) return null;
+    try {
+        const result = executeFileAction(data);
+        const action = data.action || 'create';
+        if (action === 'create') {
+            return {
+                result,
+                responseAppend: `\n📄 Fișier creat: **${result.filename}** (${result.size} bytes) → \`${result.path}\``
+            };
+        }
+        if (action === 'list') {
+            const files = result;
+            if (!files.length) return { result, responseAppend: '\n📂 Nu există fișiere salvate.' };
+            const lines = files.map(f => `  - ${f.filename} (${f.size} bytes)`).join('\n');
+            return { result, responseAppend: `\n📂 Fișiere salvate:\n${lines}` };
+        }
+        return { result };
+    } catch (err) {
+        console.error('[Orchestrator] FileAgent error:', err.message);
+        return { result: null, responseAppend: `\n❌ FileAgent eroare: ${err.message}` };
+    }
+}
+
+async function handleDocAgent(data, sessionId) {
+    if (!data) return null;
+    try {
+        const result = await executeDocAction(data, sessionId);
+        const action = data.action;
+
+        if (action === 'start') {
+            return { result, responseAppend: `\n📝 Document creat: **${result.title}** (ID: \`${result.docId}\`)` };
+        }
+        if (action === 'note') {
+            const nCount = result.notes?.length || 0;
+            return { result, responseAppend: `\n📌 Notă salvată (${nCount} note în buffer)` };
+        }
+        if (action === 'synthesize') {
+            return { result, responseAppend: `\n🧠 Sintetizat: ${result.synthesized} secțiuni din ${result.fromNotes} note` };
+        }
+        if (action === 'compile') {
+            const count = result.doc?.sections?.length || result.compiled || 0;
+            return { result, responseAppend: `\n✍️ Compilat: ${result.compiled} secțiuni noi (total ${count})` };
+        }
+        if (action === 'add') {
+            const count = result.sections?.length || 0;
+            return { result, responseAppend: `\n✅ Secțiune adăugată (total ${count} secțiuni)` };
+        }
+        if (action === 'set_sections') {
+            return { result, responseAppend: `\n✅ ${result.sections?.length || 0} secțiuni setate` };
+        }
+        if (action === 'build') {
+            return { result, responseAppend: `\n🔨 HTML construit → \`${result.filePath}\`` };
+        }
+        if (action === 'pdf') {
+            return { result, responseAppend: `\n📄 PDF generat → \`${result.pdfPath}\`` };
+        }
+        if (action === 'publish') {
+            return { result, responseAppend: `\n🚀 Publicat pe eneflorian.com → ${result.publishedUrl}` };
+        }
+        if (action === 'status') {
+            const doc = result;
+            if (doc.message) return { result, responseAppend: `\n${doc.message}` };
+            const sCount = doc.sections?.length || 0;
+            return { result, responseAppend: `\n📋 **${doc.title}** — ${sCount} secțiuni, status: ${doc.status}` };
+        }
+        if (action === 'list') {
+            const docs = result;
+            if (!docs.length) return { result, responseAppend: '\n📂 Nu există documente.' };
+            const lines = docs.map(d => `  - \`${d.docId}\` **${d.title}** (${d.sections?.length || 0} secț., ${d.status})`).join('\n');
+            return { result, responseAppend: `\n📂 Documente:\n${lines}` };
+        }
+        return { result };
+    } catch (err) {
+        console.error('[Orchestrator] DocAgent error:', err.message);
+        return { result: null, responseAppend: `\n❌ DocAgent eroare: ${err.message}` };
+    }
+}
+
 module.exports = {
     handleBooking, handleTask, handleEscalation, handleGithub, handleCron,
     handleCoding, handleGhIssues, handleProcess, handleWebAgent, handleEmail,
     handleGitApp, handleCodingLoop, handleLocalExec, handleMcp,
     handleLinkProcessor, handleTerminalTask, handleMemory, handleSearch,
-    handlePayment, handleNego, handleTasksQuery, handleBookApp
+    handlePayment, handleNego, handleTasksQuery, handleBookApp,
+    handleLeadIntel, handleGeoSearch, handleMessenger, handleFileAgent, handleDocAgent
 };

@@ -436,10 +436,72 @@ async function restoreActiveAgents() {
     }
 }
 
+async function sendFollowUps({ hoursWithoutReply = 48, inboxId = null } = {}) {
+    const EmailThread = mongoose.model('EmailThread');
+    const EmailAgentConfig = mongoose.model('EmailAgentConfig');
+
+    const cutoff = new Date(Date.now() - hoursWithoutReply * 60 * 60 * 1000);
+    const query = { status: 'active', lastReplyAt: { $lt: cutoff, $ne: null } };
+    if (inboxId) query.inboxId = inboxId;
+
+    const threads = await EmailThread.find(query);
+    const needFollowUp = threads.filter(t => {
+        const msgs = t.messages;
+        return msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant';
+    });
+
+    let sent = 0;
+    for (const thread of needFollowUp) {
+        const config = await EmailAgentConfig.findOne({ inboxId: thread.inboxId, enabled: true });
+        if (!config) continue;
+        if (thread.replyCount >= (config.maxRepliesPerThread || MAX_REPLIES_DEFAULT)) continue;
+
+        // Virtual thread with synthetic follow-up prompt — not persisted
+        const virtualThread = {
+            ...thread.toObject(),
+            messages: [
+                ...thread.messages,
+                {
+                    role: 'user',
+                    content: `[FOLLOW-UP: Au trecut ${hoursWithoutReply}+ ore fără răspuns. Trimite un mesaj scurt și politicos de follow-up, amintind oferta anterioară.]`,
+                    timestamp: new Date()
+                }
+            ]
+        };
+
+        try {
+            const response = await generateReply(virtualThread, config.toObject());
+            const replyResult = await sendEmail(thread.inboxId, {
+                to: thread.senderEmail,
+                subject: thread.subject.startsWith('Re:') ? thread.subject : `Re: ${thread.subject}`,
+                text: response,
+            });
+
+            thread.messages.push({
+                role: 'assistant',
+                content: `[Follow-up] ${response}`,
+                messageId: replyResult.messageId || `followup-${Date.now()}`,
+                timestamp: new Date()
+            });
+            thread.replyCount += 1;
+            thread.lastReplyAt = new Date();
+            await thread.save();
+            sent++;
+            console.log(`[EmailAgent] Follow-up sent for "${thread.subject}" → ${thread.senderEmail}`);
+        } catch (err) {
+            console.error(`[EmailAgent] Follow-up error for "${thread.subject}":`, err.message);
+        }
+    }
+
+    return { checked: needFollowUp.length, sent };
+}
+
 module.exports = {
     startPolling,
     stopPolling,
     isPolling,
     restoreActiveAgents,
+    processNewMessages,
+    sendFollowUps,
     DEFAULT_PERSONA
 };

@@ -1,0 +1,1 @@
+Originile Inteligenței Artificiale moderne se află în LLM-uri (Large Language Models) — cod capabil să localizeze informația (până la nivel de 'pixel' de date) și să o proceseze. Această capacitate a stat la baza apariției chatboților și a evoluției către agenții autonomi pe care îi dezvoltăm astăzi.

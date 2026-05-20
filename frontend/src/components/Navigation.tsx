@@ -3,7 +3,7 @@
 import { useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Settings, MessageCircle, Home, BarChart2, Bell, Brain, Calendar, Box, Timer, Globe, Camera, Clapperboard, Package, TerminalSquare, Code2, Mail, FolderGit2, CreditCard, Handshake, Map, ClipboardList } from 'lucide-react';
+import { Settings, MessageCircle, Home, BarChart2, Bell, Brain, Calendar, Box, Timer, Globe, Camera, Clapperboard, Package, TerminalSquare, Code2, Mail, FolderGit2, CreditCard, Handshake, Map, ClipboardList, Bot, BookMarked, Trophy } from 'lucide-react';
 
 const navItems = [
   { href: '/', icon: Home, label: 'Home', showOnMobile: true },
@@ -12,6 +12,7 @@ const navItems = [
   { href: '/payments', icon: CreditCard, label: 'Payments', showOnMobile: false },
   { href: '/terminal', icon: TerminalSquare, label: 'Terminal', showOnMobile: false },
   { href: '/coding', icon: Code2, label: 'Coding', showOnMobile: false },
+  { href: '/bounty-hunter', icon: Trophy, label: 'Bounties', showOnMobile: false },
   { href: '/aplicatii-git', icon: FolderGit2, label: 'Git Apps', showOnMobile: false },
   { href: '/cron-jobs', icon: Timer, label: 'Cron Jobs', showOnMobile: false },
   { href: '/house-objects', icon: Box, label: 'House', showOnMobile: false },
@@ -19,12 +20,15 @@ const navItems = [
   { href: '/ugc-agent', icon: Camera, label: 'UGC Image', showOnMobile: false },
   { href: '/ugc-video', icon: Clapperboard, label: 'UGC Video', showOnMobile: false },
   { href: '/ugc-product', icon: Package, label: 'UGC Product', showOnMobile: false },
-  { href: '/negotiator', icon: Handshake, label: 'Negotiator', showOnMobile: false },
   { href: '/whatsapp', icon: MessageCircle, label: 'WhatsApp', showOnMobile: false },
   { href: '/email', icon: Mail, label: 'Email', showOnMobile: false },
   { href: '/analytics', icon: BarChart2, label: 'Analytics', showOnMobile: false },
   { href: '/notifications', icon: Bell, label: 'Alerts', showOnMobile: false },
   { href: '/calendar', icon: Calendar, label: 'Calendar', showOnMobile: false },
+  { href: '/negotiator', icon: Handshake, label: 'Negotiator', showOnMobile: true },
+  { href: '/nego-agent', icon: Bot, label: 'Nego AI', showOnMobile: false },
+  { href: '/memory', icon: BookMarked, label: 'Memory', showOnMobile: false },
+  { href: '/geo', icon: Map, label: 'Geo Brain', showOnMobile: false },
   { href: '/agents', icon: ClipboardList, label: 'Agents', showOnMobile: true },
   { href: '/settings', icon: Settings, label: 'Settings', showOnMobile: true },
 ];

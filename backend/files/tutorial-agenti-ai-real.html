@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tutorial despre Agenți AI</title>
+<style>
+  :root {
+    --primary: #6366f1;
+    --primary-dark: #4f46e5;
+    --accent: #10b981;
+    --warn: #f59e0b;
+    --danger: #ef4444;
+    --bg: #0f0f1a;
+    --surface: #1a1a2e;
+    --surface2: #16213e;
+    --border: #2a2a4a;
+    --text: #e2e8f0;
+    --text-muted: #94a3b8;
+    --code-bg: #0d0d1f;
+    --radius: 12px;
+    --font: 'Segoe UI', system-ui, sans-serif;
+    --font-mono: 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+  }
+  
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 16px; line-height: 1.75; }
+
+  .tutorial-container { max-width: 860px; margin: 0 auto; padding: 40px 24px; }
+
+  .tutorial-header { margin-bottom: 40px; padding-bottom: 32px; border-bottom: 2px solid var(--border); }
+  .tutorial-category { font-size: 12px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; color: var(--primary); margin-bottom: 12px; }
+  .tutorial-title { font-size: 2.4rem; font-weight: 800; line-height: 1.2; margin-bottom: 16px; background: linear-gradient(135deg, var(--primary), var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+  
+  .tutorial-description { font-size: 1.1rem; color: var(--text-muted); line-height: 1.6; margin-bottom: 20px; }
+  .tutorial-meta { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  .meta-item { font-size: 13px; color: var(--text-muted); }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; background: var(--primary); color: #fff; margin-right: 6px; }
+
+  .toc { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px 28px; margin: 32px 0; }
+  .toc h3 { font-size: 14px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--text-muted); margin-bottom: 14px; }
+  .toc ol { padding-left: 20px; }
+  .toc li { margin-bottom: 6px; }
+  .toc a { color: var(--primary); text-decoration: none; font-size: 15px; }
+  .toc a:hover { text-decoration: underline; }
+
+  .tutorial-body p { margin-bottom: 18px; }
+  .tutorial-body p:last-child { margin-bottom: 0; }
+
+  .section-heading { font-size: 1.6rem; font-weight: 700; margin: 48px 0 20px; padding-bottom: 12px; border-bottom: 1px solid var(--border); color: var(--text); }
+  .sub-heading { font-size: 1.25rem; font-weight: 600; margin: 32px 0 14px; color: var(--text); }
+
+  .intro-block { background: linear-gradient(135deg, rgba(99,102,241,0.1), rgba(16,185,129,0.1)); border-left: 4px solid var(--primary); border-radius: 0 var(--radius) var(--radius) 0; padding: 20px 24px; margin-bottom: 32px; }
+
+  .code-block { background: var(--code-bg); border-radius: var(--radius); overflow: hidden; margin: 24px 0; border: 1px solid var(--border); }
+  .code-lang { background: rgba(99,102,241,0.2); color: var(--primary); font-size: 12px; font-weight: 700; padding: 8px 16px; text-transform: uppercase; letter-spacing: 1px; }
+  .code-block pre { padding: 20px; overflow-x: auto; }
+  .code-block code { font-family: var(--font-mono); font-size: 14px; line-height: 1.6; color: var(--text); }
+
+  .content-list { padding-left: 24px; margin: 16px 0; }
+  .content-list li { margin-bottom: 10px; }
+
+  .callout { display: flex; gap: 16px; padding: 18px 22px; border-radius: var(--radius); margin: 24px 0; }
+  .callout-icon { font-size: 22px; flex-shrink: 0; margin-top: 2px; }
+  .callout strong { display: block; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+  .callout p { margin: 0; font-size: 15px; }
+  .callout-tip { background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.3); }
+  .callout-tip strong { color: var(--accent); }
+  .callout-warning { background: rgba(245,158,11,0.1); border: 1px solid rgba(245,158,11,0.3); }
+  .callout-warning strong { color: var(--warn); }
+  .callout-note { background: rgba(99,102,241,0.1); border: 1px solid rgba(99,102,241,0.3); }
+  .callout-note strong { color: var(--primary); }
+
+  .content-figure { text-align: center; margin: 28px 0; }
+  .content-figure img { max-width: 100%; border-radius: var(--radius); border: 1px solid var(--border); }
+  .content-figure figcaption { font-size: 13px; color: var(--text-muted); margin-top: 10px; }
+
+  .section-divider { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+
+  .conclusion-block { background: var(--surface); border-radius: var(--radius); padding: 28px; margin-top: 48px; border: 1px solid var(--border); }
+  .conclusion-block h3 { font-size: 18px; color: var(--primary); margin-bottom: 14px; }
+
+  .tutorial-footer { margin-top: 60px; padding-top: 24px; border-top: 1px solid var(--border); font-size: 13px; color: var(--text-muted); text-align: center; }
+
+  @media print { body { background: white; color: black; } }
+</style>
+</head>
+<body>
+<div class="tutorial-container">
+  <header class="tutorial-header">
+    <div class="tutorial-category">ai-agents</div>
+    <h1 class="tutorial-title">Tutorial despre Agenți AI</h1>
+    <p class="tutorial-description">Un ghid detaliat despre conceptele și implementarea agenților AI, de la baze la aplicații avansate.</p>
+    <div class="tutorial-meta">
+      <span class="meta-item">✍️ Ilie AI</span>
+      <span class="meta-item">📅 8 mai 2026</span>
+      <span><span class="badge">AI</span><span class="badge">Agenti</span></span>
+    </div>
+  </header>
+  <nav class="toc"><h3>Cuprins</h3><ol><li><a href="#section-0">Ce este un Agent AI?</a></li><li><a href="#section-1">Tipuri de Agenți AI</a></li><li><a href="#section-2">Aplicații Practice</a></li><li><a href="#section-3">Evoluția Machine Learning și a LLM-urilor</a></li><li><a href="#section-4">LLM-urile ca Bază a Agenților AI</a></li><li><a href="#section-5">Considerații Etice</a></li></ol></nav>
+  <div class="tutorial-body">
+    <div class="intro-block"><p>Agenții AI reprezintă viitorul inteligenței artificiale. Ei sunt capabili să perceapă mediul înconjurător, să ia decizii și să execute acțiuni autonome pentru a atinge obiective complexe.</p></div>
+    <h2 id="section-0" class="section-heading">Ce este un Agent AI?</h2>
+    <p>Un agent AI este un program care observă contextul, planifică acțiuni și acționează autonom. Spre deosebire de un program simplu care urmează instrucțiuni fixe, un agent se adaptează la schimbările din mediu și ia decizii bazate pe starea curentă.</p>
+    <h2 id="section-1" class="section-heading">Tipuri de Agenți AI</h2>
+    <ul class="content-list"><li>Agenți reactivi - răspund direct la input fără să rețină memorie. Exemplu: un termostat inteligent care reacționează la temperatura curentă.</li><li>Agenți deliberativi - planifică acțiuni pe baza unui model intern al lumii. Au memorie și pot anticipa consecințele acțiunilor.</li><li>Agenți hibrizi - combină reacția rapidă cu planificarea pe termen lung. Cei mai eficienți în practică.</li></ul>
+    <h2 id="section-2" class="section-heading">Aplicații Practice</h2>
+    <p>Agenții AI sunt folosiți pentru: automatizarea sarcinilor repetitive, asistenți virtuali avansați, roboți industriali și logistică, sisteme de recomandare personalizată. Orice domeniu care implică luarea de decizii bazate pe date poate beneficia de agenți AI.</p>
+    <h2 id="section-3" class="section-heading">Evoluția Machine Learning și a LLM-urilor</h2>
+    <p>Machine learning a evoluat de la algoritmi statistici simpli la rețele neurale profunde (deep learning). Large Language Models (LLM) - modele de limbaj de mari dimensiuni - sunt antrenate pe cantități uriașe de text și pot înțelege și genera limbaj natural cu acuratețe remarcabilă. Modele precum GPT-4, Claude sau Gemini sunt exemple de LLM-uri de ultimă generație.</p>
+    <h2 id="section-4" class="section-heading">LLM-urile ca Bază a Agenților AI</h2>
+    <p>Un LLM devine agent AI atunci când are acces la instrumente (tools): poate căuta pe web, executa cod, trimite emailuri, citii fișiere și lua decizii complexe. Orchestratorul coordonează aceste acțiuni, formând un sistem capabil să rezolve probleme multi-pas în mod autonom.</p>
+    <h2 id="section-5" class="section-heading">Considerații Etice</h2>
+    <p>Autonomia agenților AI ridică întrebări importante: responsabilitate (cine răspunde de acțiunile agentului?), transparență (cum se iau deciziile?), confidențialitate și impactul asupra pieței muncii. Este esențial ca sistemele AI să fie sigure, explicabile și aliniate cu valorile umane.</p>
+    <div class="conclusion-block"><h3>Concluzie</h3><p>Agenții AI și LLM-urile redefinesc modul în care interacționăm cu tehnologia. De la asistenți vocali la sisteme autonome complexe, aceste tehnologii vor juca un rol central în viitorul digitizării.</p></div>
+  </div>
+  <footer class="tutorial-footer">
+    Generat de Ilie AI • eneflorian.com
+  </footer>
+</div>
+</body>
+</html>

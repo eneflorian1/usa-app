@@ -43,6 +43,23 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
     // 3. Inject memory + task context
     let contextBlock = '';
     try {
+        // Inject user Profile (email, phone, name) so Gemini never asks for them
+        try {
+            const Profile = mongoose.model('Profile');
+            const profile = await Profile.findOne().lean();
+            if (profile) {
+                const parts = [];
+                if (profile.firstName || profile.lastName) parts.push(`Nume: ${[profile.firstName, profile.lastName].filter(Boolean).join(' ')}`);
+                if (profile.email) parts.push(`Email: ${profile.email}`);
+                if (profile.phone) parts.push(`Telefon/WhatsApp: ${profile.phone}`);
+                if (profile.address) parts.push(`Adresă: ${profile.address}`);
+                if (parts.length > 0) {
+                    contextBlock += `\n[USER_CONTACT_PROFILE]\n${parts.join('\n')}\nFolosește aceste date direct — NU cere email sau telefon utilizatorului.\n[/USER_CONTACT_PROFILE]\n`;
+                }
+            }
+        } catch (profileErr) {
+            console.error('[Orchestrator] Profile inject error:', profileErr.message);
+        }
         const activeTasks = await PlannerTask.find({ completed: false }).sort({ dueDate: 1 }).limit(20).lean();
         if (activeTasks.length > 0) {
             const taskLines = activeTasks.map(t => {
@@ -103,6 +120,25 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
             }
         }
 
+        // Active document draft context
+        try {
+            const { getLatestDraft } = require('../documentService');
+            const activeDraft = await getLatestDraft(sessionId);
+            if (activeDraft && activeDraft.status !== 'published') {
+                const sCount = activeDraft.sections?.length || 0;
+                const nCount = activeDraft.notes?.length || 0;
+                const sPreview = activeDraft.sections?.slice(-3).map(s =>
+                    `  • [${s.type}] ${s.text?.substring(0, 60) || s.code?.substring(0, 40) || ''}`
+                ).join('\n') || '  (nicio secțiune încă)';
+                const nPreview = nCount > 0
+                    ? `\n  Note în buffer (${nCount}):\n${activeDraft.notes.slice(-3).map(n => `  📌 "${n.substring(0, 80)}"`).join('\n')}`
+                    : '';
+                contextBlock += `\n[ACTIVE_DOCUMENT]\nDocument activ: "${activeDraft.title}" (docId: ${activeDraft.docId})\n  Status: ${activeDraft.status} | ${sCount} secțiuni | ${nCount} note în buffer | categorie: ${activeDraft.categoryId}\n  Ultimele secțiuni:\n${sPreview}${nPreview}\n[/ACTIVE_DOCUMENT]\n`;
+            }
+        } catch (draftErr) {
+            // Non-critical
+        }
+
         // Cassandra semantic recall (vector memory + recent + prior relevant turns)
         try {
             const cassandraMem = require('../services/cassandra');
@@ -123,16 +159,46 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
 
     const enrichedMessage = contextBlock ? `${contextBlock}\nMesajul utilizatorului: ${userMessage}` : userMessage;
 
-    // 4. Single Gemini call
-    const model = await getGeminiModel(SYSTEM_PROMPT, 'gemini-2.5-flash-lite');
-    const geminiChat = model.startChat({ history });
-    const result = await geminiChat.sendMessage(enrichedMessage);
-    let responseText = result.response.text();
+    // 4. Single Gemini call — fallback chain on 429/404
+    const MODEL_CHAIN = [
+        'gemini-2.5-flash', 'gemini-2.0-flash',
+        'gemini-2.5-flash-lite', 'gemini-2.0-flash-lite',
+        'gemini-flash-latest', 'gemini-flash-lite-latest',
+        'gemini-3.1-flash-lite', 'gemini-3-flash-preview'
+    ];
+    let responseText = '';
+    let lastErr = null;
+    for (const modelName of MODEL_CHAIN) {
+        try {
+            const model = await getGeminiModel(SYSTEM_PROMPT, modelName);
+            const geminiChat = model.startChat({ history });
+            const result = await geminiChat.sendMessage(enrichedMessage);
+            responseText = result.response.text();
+            if (modelName !== MODEL_CHAIN[0]) console.log(`[Orchestrator] Used fallback model: ${modelName}`);
+            lastErr = null;
+            break;
+        } catch (err) {
+            lastErr = err;
+            const retryable = err.message?.includes('429') || err.message?.includes('404') || err.message?.includes('not found');
+            if (retryable) {
+                console.warn(`[Orchestrator] ${modelName} unavailable (${err.message?.includes('429') ? 'quota' : 'not found'}), trying next...`);
+                continue;
+            }
+            throw err;
+        }
+    }
+    if (!responseText && lastErr) throw lastErr;
     console.log('[Orchestrator] Response:', responseText.substring(0, 300));
 
     // 5. Extract all tool commands and detect intent
     const tools = extractAllTools(responseText);
     const intent = detectIntent(userMessage, tools);
+    const extractedTags = Object.keys(tools);
+    if (extractedTags.length > 0) {
+        console.log(`[Orchestrator] Tags extracted: ${extractedTags.join(', ')}`);
+    } else {
+        console.log(`[Orchestrator] No tags extracted — text-only response`);
+    }
     responseText = cleanAllTags(responseText);
 
     // 6. Execute actions via handlers
@@ -252,6 +318,59 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
         return r?.result;
     });
 
+    // Lead Intelligence — scrape → analyze → score → draft
+    if (tools.LEAD_INTEL_JSON) {
+        await safeExec('leadIntel', async () => {
+            const r = await h.handleLeadIntel(tools.LEAD_INTEL_JSON);
+            if (r && r.responseOverride) responseText = r.responseOverride;
+            return r?.result;
+        });
+    }
+
+    // Geo Search — Geo Brain: search planner + OLX agent + lead intel + monitor
+    if (tools.GEO_SEARCH_JSON) {
+        await safeExec('geoSearch', async () => {
+            const r = await h.handleGeoSearch(tools.GEO_SEARCH_JSON, userMessage, null);
+            if (r && r.responseOverride) responseText = r.responseOverride;
+            return r?.result;
+        });
+    }
+
+    // File Agent — creează/listează/citește fișiere (rulează ÎNAINTE de Messenger pentru same-turn attach)
+    if (tools.FILE_AGENT_JSON) {
+        await safeExec('fileAgent', async () => {
+            const r = await h.handleFileAgent(tools.FILE_AGENT_JSON);
+            if (r?.responseAppend) responseText += r.responseAppend;
+            return r?.result;
+        });
+    }
+
+    // Doc Agent — creare/editare documente multi-turn + PDF + publish eneflorian.com
+    // DOC_AGENT_JSON is a MULTI_TAG — process all actions sequentially in order
+    if (tools.DOC_AGENT_JSON) {
+        const docActions = Array.isArray(tools.DOC_AGENT_JSON) ? tools.DOC_AGENT_JSON : [tools.DOC_AGENT_JSON];
+        let lastDocResult = null;
+        for (const action of docActions) {
+            await safeExec('docAgent', async () => {
+                const r = await h.handleDocAgent(action, sessionId);
+                if (r?.responseAppend) responseText += r.responseAppend;
+                lastDocResult = r?.result;
+                return lastDocResult;
+            });
+        }
+        results.docAgent = lastDocResult;
+    }
+
+    // Messenger — trimite email/WhatsApp cu transcript de conversație
+    if (tools.MESSENGER_JSON) {
+        await safeExec('messenger', async () => {
+            const r = await h.handleMessenger(tools.MESSENGER_JSON, sessionId);
+            if (r?.responseOverride) responseText = r.responseOverride;
+            if (r?.responseAppend) responseText += '\n' + r.responseAppend;
+            return r?.result;
+        });
+    }
+
     // 7. Save to history
     chat.messages.push({ role: 'user', content: userMessage });
     chat.messages.push({ role: 'model', content: responseText });
@@ -280,7 +399,7 @@ async function processOrchestratorMessage(userMessage, sessionId = 'orchestrator
         linkProcessor: results.linkProcessor, gitApp: results.gitApp,
         memory: results.memory, tasksQuery: results.tasksQuery,
         search: results.search, nego: results.nego,
-        bookApp: results.bookApp
+        bookApp: results.bookApp, fileAgent: results.fileAgent, docAgent: results.docAgent
     };
 }
 

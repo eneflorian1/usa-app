@@ -10,6 +10,10 @@ interface ToolCallInfo {
     task?: string;
 }
 
+interface UseGeminiLiveOptions {
+    sessionId?: string;
+}
+
 interface UseGeminiLiveReturn {
     sessionState: SessionState;
     isModelSpeaking: boolean;
@@ -17,6 +21,8 @@ interface UseGeminiLiveReturn {
     aiTranscript: string;
     toolCall: ToolCallInfo | null;
     errorMessage: string;
+    voiceSessionId: string;
+    exchangeCount: number;
     startSession: () => void;
     stopSession: () => void;
 }
@@ -46,7 +52,9 @@ You have exactly ONE tool: execute. This connects you to a powerful personal ass
 - Manage background processes
 - Send WhatsApp messages
 
-ALWAYS use execute when the user asks you to do anything beyond just answering a question. Be detailed in your task description — include all relevant context: names, dates, content, platforms, etc.
+ALWAYS use execute when the user asks you to do anything beyond just answering a question.
+
+CRITICAL: In the "task" field, copy the user's EXACT words as closely as possible. Do NOT paraphrase, summarize, or interpret. The orchestrator needs the verbatim request to process correctly.
 
 NEVER pretend to do these things yourself.
 
@@ -71,7 +79,7 @@ const TOOL_DECLARATIONS = [{
     behavior: 'BLOCKING'
 }];
 
-export function useGeminiLive(): UseGeminiLiveReturn {
+export function useGeminiLive(options?: UseGeminiLiveOptions): UseGeminiLiveReturn {
     const [sessionState, setSessionState] = useState<SessionState>('disconnected');
     const [isModelSpeaking, setIsModelSpeaking] = useState(false);
     const [userTranscript, setUserTranscript] = useState('');
@@ -80,6 +88,12 @@ export function useGeminiLive(): UseGeminiLiveReturn {
     const [errorMessage, setErrorMessage] = useState('');
 
     const wsRef = useRef<WebSocket | null>(null);
+    const voiceSessionIdRef = useRef<string>('');
+    const rawUserTranscriptRef = useRef<string>('');
+    const [voiceSessionId, setVoiceSessionId] = useState('');
+    const [exchangeCount, setExchangeCount] = useState(0);
+    const externalSessionIdRef = useRef(options?.sessionId || '');
+    externalSessionIdRef.current = options?.sessionId || '';
     const audioContextRef = useRef<AudioContext | null>(null);
     const mediaStreamRef = useRef<MediaStream | null>(null);
     const workletNodeRef = useRef<AudioWorkletNode | null>(null);
@@ -170,13 +184,16 @@ export function useGeminiLive(): UseGeminiLiveReturn {
     // Handle tool call — route through orchestrator API
     const handleToolCall = useCallback(async (callId: string, name: string, args: Record<string, unknown>) => {
         const taskDesc = (args.task as string) || JSON.stringify(args);
-        setToolCall({ status: 'executing', name, task: taskDesc.substring(0, 80) });
+        // Use raw voice transcript if available (exact words), fall back to AI's interpretation
+        const rawTranscript = rawUserTranscriptRef.current.trim();
+        const message = rawTranscript || taskDesc;
+        setToolCall({ status: 'executing', name, task: message.substring(0, 80) });
 
         try {
             const res = await fetch('/api/orchestrator/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message: taskDesc }),
+                body: JSON.stringify({ message, sessionId: voiceSessionIdRef.current }),
             });
 
             if (!res.ok) {
@@ -190,6 +207,7 @@ export function useGeminiLive(): UseGeminiLiveReturn {
 
             const data = await res.json();
             const result = data.reply || 'Done';
+            setExchangeCount(prev => prev + 1);
 
             // Send tool response back to Gemini
             if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -297,12 +315,14 @@ export function useGeminiLive(): UseGeminiLiveReturn {
                 setIsModelSpeaking(false);
                 isModelSpeakingRef.current = false;
                 setUserTranscript('');
+                rawUserTranscriptRef.current = '';
             }
 
             if (sc.inputTranscription) {
                 const it = sc.inputTranscription as Record<string, unknown>;
                 if (it.text) {
                     setUserTranscript(prev => prev + (it.text as string));
+                    rawUserTranscriptRef.current += it.text as string;
                     setAiTranscript('');
                 }
             }
@@ -344,6 +364,12 @@ export function useGeminiLive(): UseGeminiLiveReturn {
         setToolCall(null);
         setSessionState('connecting');
         isActiveRef.current = true;
+        // Resume existing voice session or generate a new one
+        const extId = externalSessionIdRef.current;
+        voiceSessionIdRef.current = extId?.startsWith('orch-voice-')
+            ? extId
+            : 'orch-voice-' + crypto.randomUUID().split('-')[0];
+        setVoiceSessionId(voiceSessionIdRef.current);
 
         try {
             // 1. Get API key from backend - Corrected path to /api/settings/voice/config
@@ -542,6 +568,6 @@ export function useGeminiLive(): UseGeminiLiveReturn {
 
     return {
         sessionState, isModelSpeaking, userTranscript, aiTranscript,
-        toolCall, errorMessage, startSession, stopSession,
+        toolCall, errorMessage, voiceSessionId, exchangeCount, startSession, stopSession,
     };
 }

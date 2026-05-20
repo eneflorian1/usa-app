@@ -35,6 +35,9 @@ require('./NegoMission');
 require('./NegoMessage');
 require('./NegoConfig');
 require('./Profile');
+require('./GeoPreference');
+require('./DocumentDraft');
+require('./BountySession');
 
 // Re-export all models for convenience
 module.exports = {
@@ -72,4 +75,6 @@ module.exports = {
   NegoMessage: mongoose.model('NegoMessage'),
   NegoConfig: mongoose.model('NegoConfig'),
   Profile: mongoose.model('Profile'),
+  GeoPreference: mongoose.model('GeoPreference'),
+  DocumentDraft: mongoose.model('DocumentDraft'),
 };

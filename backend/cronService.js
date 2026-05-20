@@ -92,6 +92,51 @@ async function executeAction(job) {
                 break;
             }
 
+            case 'pm2_monitor': {
+                try {
+                    const { exec } = require('child_process');
+                    const { promisify } = require('util');
+                    const execAsync = promisify(exec);
+
+                    const { stdout } = await execAsync('pm2 jlist');
+                    const processes = JSON.parse(stdout);
+
+                    const down = processes.filter(p => p.pm2_env?.status !== 'online');
+                    const ignored = job.actionPayload?.ignoreProcesses || [];
+                    const alertable = down.filter(p => !ignored.includes(p.name));
+
+                    if (alertable.length === 0) {
+                        output = `All ${processes.length} PM2 processes are online`;
+                        console.log(`[Cron] ✅ PM2 Monitor: all processes online`);
+                        break;
+                    }
+
+                    const lines = alertable.map(p =>
+                        `• ${p.name}: ${p.pm2_env?.status} (restarts: ${p.pm2_env?.restart_time})`
+                    ).join('\n');
+                    const message = `⚠️ PM2 Alert — ${alertable.length} process(es) down:\n${lines}`;
+
+                    const chatId = job.actionPayload?.chatId;
+                    const userId = job.actionPayload?.userId || 'default';
+
+                    if (chatId) {
+                        const { callMcpTool } = require('./mcpBridgeService');
+                        await callMcpTool('nego_send_whatsapp', { userId, chatId, message });
+                        output = `Alert sent to ${chatId}: ${message}`;
+                        console.log(`[Cron] 📱 PM2 Monitor alert sent: ${alertable.map(p => p.name).join(', ')}`);
+                    } else {
+                        output = `PM2 down: ${message} (no chatId configured — skipped WhatsApp)`;
+                        console.warn(`[Cron] ⚠️ PM2 Monitor: processes down but no chatId configured`);
+                    }
+                    result = 'error';
+                } catch (err) {
+                    result = 'error';
+                    output = `PM2 monitor error: ${err.message}`;
+                    console.error(`[Cron] ❌ PM2 monitor error:`, err.message);
+                }
+                break;
+            }
+
             case 'http': {
                 try {
                     const url = job.actionPayload?.url;
@@ -116,6 +161,257 @@ async function executeAction(job) {
                     result = 'error';
                     output = `HTTP error: ${err.message}`;
                     console.error(`[Cron] ❌ HTTP error:`, err.message);
+                }
+                break;
+            }
+
+            case 'email_check_inbox': {
+                try {
+                    const EmailAgentConfig = mongoose.model('EmailAgentConfig');
+                    const { processNewMessages } = require('./emailAgentService');
+                    const inboxId = job.actionPayload?.inboxId || null;
+
+                    let configs;
+                    if (inboxId) {
+                        const cfg = await EmailAgentConfig.findOne({ inboxId, enabled: true });
+                        configs = cfg ? [cfg] : [];
+                    } else {
+                        configs = await EmailAgentConfig.find({ enabled: true });
+                    }
+
+                    if (configs.length === 0) {
+                        output = 'No active email agents configured';
+                        break;
+                    }
+
+                    let processed = 0;
+                    for (const cfg of configs) {
+                        await processNewMessages(cfg.inboxId, cfg.toObject());
+                        processed++;
+                    }
+                    output = `Checked ${processed} inbox(es)`;
+                    console.log(`[Cron] 📧 Email check: ${output}`);
+                } catch (err) {
+                    result = 'error';
+                    output = `Email check error: ${err.message}`;
+                    console.error(`[Cron] ❌ Email check error:`, err.message);
+                }
+                break;
+            }
+
+            case 'email_followup': {
+                try {
+                    const { sendFollowUps } = require('./emailAgentService');
+                    const hours = job.actionPayload?.hoursWithoutReply || 48;
+                    const inboxId = job.actionPayload?.inboxId || null;
+                    const { checked, sent } = await sendFollowUps({ hoursWithoutReply: hours, inboxId });
+                    output = `Follow-up: ${checked} threads checked, ${sent} sent`;
+                    console.log(`[Cron] 📧 ${output}`);
+                } catch (err) {
+                    result = 'error';
+                    output = `Email follow-up error: ${err.message}`;
+                    console.error(`[Cron] ❌ Email follow-up error:`, err.message);
+                }
+                break;
+            }
+
+            case 'mongo_backup': {
+                try {
+                    const { exec } = require('child_process');
+                    const { promisify } = require('util');
+                    const path = require('path');
+                    const execAsync = promisify(exec);
+                    const dbName = job.actionPayload?.dbName || 'usa_db';
+                    const backupDir = job.actionPayload?.backupDir || '/root/backups/mongo';
+                    const ts = new Date().toISOString().slice(0, 10);
+                    const dest = path.join(backupDir, `${dbName}-${ts}`);
+
+                    await execAsync(`mkdir -p ${backupDir}`);
+                    await execAsync(`mongodump --db ${dbName} --out ${dest}`);
+                    // Keep last 7 backups
+                    await execAsync(`ls -dt ${backupDir}/${dbName}-* | tail -n +8 | xargs rm -rf`);
+                    output = `MongoDB backup: ${dest}`;
+                    console.log(`[Cron] 💾 ${output}`);
+                } catch (err) {
+                    result = 'error';
+                    output = `Mongo backup error: ${err.message}`;
+                    console.error(`[Cron] ❌ Mongo backup error:`, err.message);
+                }
+                break;
+            }
+
+            case 'cleanup_logs': {
+                try {
+                    const { exec } = require('child_process');
+                    const { promisify } = require('util');
+                    const execAsync = promisify(exec);
+                    const days = job.actionPayload?.olderThanDays || 7;
+
+                    // PM2 logs
+                    const { stdout: pm2LogDir } = await execAsync('pm2 pid 2>/dev/null; echo /root/.pm2/logs').catch(() => ({ stdout: '/root/.pm2/logs' }));
+                    await execAsync(`find /root/.pm2/logs -name "*.log" -mtime +${days} -delete 2>/dev/null || true`);
+
+                    // CronJobLog collection cleanup
+                    const CronJobLog = mongoose.model('CronJobLog');
+                    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+                    const { deletedCount } = await CronJobLog.deleteMany({ executedAt: { $lt: cutoff } });
+
+                    output = `Cleanup: PM2 logs older than ${days}d removed, ${deletedCount} cron log entries deleted`;
+                    console.log(`[Cron] 🧹 ${output}`);
+                } catch (err) {
+                    result = 'error';
+                    output = `Cleanup error: ${err.message}`;
+                    console.error(`[Cron] ❌ Cleanup error:`, err.message);
+                }
+                break;
+            }
+
+            case 'nego_scrape': {
+                try {
+                    const { callMcpTool } = require('./mcpBridgeService');
+                    const categories = job.actionPayload?.categories || [];
+                    if (categories.length === 0) {
+                        output = 'No categories configured in actionPayload.categories';
+                        result = 'error';
+                        break;
+                    }
+                    let created = 0;
+                    for (const url of categories) {
+                        const r = await callMcpTool('nego_get_leads', { limit: 1 }).catch(() => null);
+                        await callMcpTool('nego_start_mission', { categoryUrl: url, mode: 'category' }).catch(err => {
+                            console.error(`[Cron] nego_scrape error for ${url}:`, err.message);
+                        });
+                        created++;
+                    }
+                    output = `Scrape started for ${created} categor${created === 1 ? 'y' : 'ies'}`;
+                    console.log(`[Cron] 🔍 ${output}`);
+                } catch (err) {
+                    result = 'error';
+                    output = `Nego scrape error: ${err.message}`;
+                    console.error(`[Cron] ❌ Nego scrape error:`, err.message);
+                }
+                break;
+            }
+
+            case 'nego_leads_report': {
+                try {
+                    const { callMcpTool } = require('./mcpBridgeService');
+                    const chatId = job.actionPayload?.chatId;
+                    const userId = job.actionPayload?.userId || 'default';
+
+                    const stats = await callMcpTool('nego_get_stats', {});
+                    const leads = await callMcpTool('nego_get_leads', { limit: 500 }).catch(() => []);
+
+                    const leadsArr = Array.isArray(leads) ? leads : [];
+                    const now = Date.now();
+                    const newToday = leadsArr.filter(l => {
+                        const d = new Date(l.createdAt || l.updatedAt || 0);
+                        return now - d.getTime() < 24 * 60 * 60 * 1000;
+                    }).length;
+
+                    const byStatus = stats?.byStatus || {};
+                    const lines = [
+                        `📊 *Raport Leads — ${new Date().toLocaleDateString('ro-RO')}*`,
+                        `Total: ${stats?.totalLeads || leadsArr.length}`,
+                        `Noi azi: ${newToday}`,
+                        ...Object.entries(byStatus).map(([s, n]) => `${s}: ${n}`),
+                    ];
+                    const message = lines.join('\n');
+
+                    if (chatId) {
+                        await callMcpTool('nego_send_whatsapp', { userId, chatId, message });
+                        output = `Report sent to ${chatId}`;
+                    } else {
+                        output = message;
+                    }
+                    console.log(`[Cron] 📊 ${output}`);
+                } catch (err) {
+                    result = 'error';
+                    output = `Leads report error: ${err.message}`;
+                    console.error(`[Cron] ❌ Leads report error:`, err.message);
+                }
+                break;
+            }
+
+            case 'lead_intelligence': {
+                try {
+                    const { runLeadIntelligencePipeline, runBatchAnalysis } = require('./services/leadIntelligence');
+                    const url = job.actionPayload?.url;
+                    const chatId = job.actionPayload?.chatId;
+                    const userId = job.actionPayload?.userId || 'default';
+                    const limit = job.actionPayload?.limit || 10;
+
+                    if (url) {
+                        const r = await runLeadIntelligencePipeline({ url, chatId, userId });
+                        output = `Lead analyzed: ${r.listing?.title} — score ${r.score?.score}/10 (${r.score?.verdict})`;
+                    } else {
+                        const r = await runBatchAnalysis({ chatId, userId, limit });
+                        output = `Batch: ${r.processed} leads analyzed`;
+                    }
+                    console.log(`[Cron] 🤖 Lead Intelligence: ${output}`);
+                } catch (err) {
+                    result = 'error';
+                    output = `Lead intelligence error: ${err.message}`;
+                    console.error(`[Cron] ❌ Lead intelligence error:`, err.message);
+                }
+                break;
+            }
+
+            case 'nego_retry_leads': {
+                try {
+                    const { callMcpTool } = require('./mcpBridgeService');
+                    const daysWithoutContact = job.actionPayload?.daysWithoutContact || 3;
+                    const chatId = job.actionPayload?.chatId;
+                    const userId = job.actionPayload?.userId || 'default';
+
+                    const leads = await callMcpTool('nego_get_leads', { limit: 500 }).catch(() => []);
+                    const leadsArr = Array.isArray(leads) ? leads : [];
+                    const cutoff = Date.now() - daysWithoutContact * 24 * 60 * 60 * 1000;
+
+                    const stale = leadsArr.filter(l => {
+                        if (!['new', 'contacted'].includes(l.status)) return false;
+                        const last = new Date(l.lastContactAt || l.createdAt || 0).getTime();
+                        return last < cutoff;
+                    });
+
+                    if (stale.length === 0) {
+                        output = `No stale leads (>${daysWithoutContact}d without contact)`;
+                        break;
+                    }
+
+                    if (chatId) {
+                        const names = stale.slice(0, 10).map(l => `• ${l.title || l.phone || l._id}`).join('\n');
+                        const message = `🔄 *Leads fără contact (>${daysWithoutContact} zile)*\n${names}${stale.length > 10 ? `\n...și ${stale.length - 10} altele` : ''}`;
+                        await callMcpTool('nego_send_whatsapp', { userId, chatId, message });
+                    }
+
+                    output = `${stale.length} stale lead(s) flagged${chatId ? ', WhatsApp sent' : ''}`;
+                    console.log(`[Cron] 🔄 ${output}`);
+                } catch (err) {
+                    result = 'error';
+                    output = `Nego retry error: ${err.message}`;
+                    console.error(`[Cron] ❌ Nego retry error:`, err.message);
+                }
+                break;
+            }
+
+            case 'bounty_hunt': {
+                try {
+                    const bountyHunter = require('./bountyHunterService');
+                    const state = await bountyHunter.getState();
+                    if (state.isRunning) {
+                        output = 'BountyHunter already running — skipped';
+                        console.log('[Cron] ⏭️ BountyHunter already running');
+                    } else {
+                        const session = await bountyHunter.start({
+                            skipDangerously: job.actionPayload?.skipDangerously || false,
+                        });
+                        output = `BountyHunter started: session ${session._id}`;
+                        console.log('[Cron] 🏆 BountyHunter started by cron');
+                    }
+                } catch (err) {
+                    result = 'error';
+                    output = `BountyHunter error: ${err.message}`;
                 }
                 break;
             }

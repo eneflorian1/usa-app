@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 
 const AgentChatSchema = new mongoose.Schema({
   sessionId: { type: String, default: 'default', index: true },
+  title: { type: String, default: '' },
   agentType: { type: String, default: 'general' },
   userProfile: {
     name: String,
@@ -15,6 +16,7 @@ const AgentChatSchema = new mongoose.Schema({
     content: String,
     timestamp: { type: Date, default: Date.now }
   }],
+  createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });
 

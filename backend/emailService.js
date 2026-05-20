@@ -81,7 +81,7 @@ async function updateInbox(inboxId, updates = {}) {
 
 // ── Message Operations ───────────────────────────────────────────────────────
 
-async function sendEmail(inboxId, { to, subject, text, html, cc, bcc, replyTo, inReplyTo, references, fromName }) {
+async function sendEmail(inboxId, { to, subject, text, html, cc, bcc, replyTo, inReplyTo, references, fromName, attachments }) {
     const am = await getClient();
     const sendPayload = {
         to,
@@ -91,15 +91,21 @@ async function sendEmail(inboxId, { to, subject, text, html, cc, bcc, replyTo, i
         cc: cc || undefined,
         bcc: bcc || undefined,
     };
-    // replyTo = email address for Reply-To header (where replies go)
     if (replyTo) sendPayload.replyTo = replyTo;
-    // inReplyTo = messageId for In-Reply-To header (thread linking)
     if (inReplyTo) sendPayload.inReplyTo = inReplyTo;
     if (references) sendPayload.references = references;
-    // Try to set fromName if supported
     if (fromName) sendPayload.fromName = fromName;
+    // Attachments: [{ filename, contentType, content (base64), url }]
+    if (Array.isArray(attachments) && attachments.length > 0) {
+        sendPayload.attachments = attachments.map(a => ({
+            filename: a.filename || 'attachment',
+            contentType: a.contentType || 'application/octet-stream',
+            content: a.content || undefined,
+            url: a.url || undefined,
+        }));
+    }
     const msg = await am.inboxes.messages.send(inboxId, sendPayload);
-    console.log('[Email] Sent:', subject, '→', to);
+    console.log('[Email] Sent:', subject, '→', to, attachments?.length ? `(${attachments.length} attachments)` : '');
     return {
         messageId: msg.messageId || msg.id,
         to,

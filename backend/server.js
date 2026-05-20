@@ -51,6 +51,7 @@ app.use('/api/whatsapp', require('./routes/whatsapp'));
 app.use('/api/github', require('./routes/github'));
 app.use('/api/processes', require('./routes/processes'));
 app.use('/api/coding', require('./routes/coding'));
+app.use('/api/bounty-hunter', require('./routes/bountyHunter'));
 app.use('/api', require('./routes/objects'));
 app.use('/api/cron-jobs', require('./routes/cronJobs'));
 app.use('/api/web-agent', require('./routes/webAgent'));
@@ -65,6 +66,8 @@ app.use('/api/payments', require('./routes/payments'));
 app.use('/api/nego', require('./routes/nego'));
 app.use('/api/pm2', require('./routes/pm2'));
 app.use('/api/profile', require('./routes/profile'));
+app.use('/api/lead-intelligence', require('./routes/leadIntelligence'));
+app.use('/api/geo', require('./routes/geo'));
 
 // Glasses OpenAI-compatible endpoint (special path, not under /api/glasses)
 const glassesRoutes = require('./routes/glasses');

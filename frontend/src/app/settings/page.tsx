@@ -43,6 +43,10 @@ export default function SettingsPage() {
     const [searxngIsDefault, setSearxngIsDefault] = useState(true);
     const [searxngStatus, setSearxngStatus] = useState('');
 
+    const [agentmailKey, setAgentmailKey] = useState('');
+    const [agentmailDisplay, setAgentmailDisplay] = useState<string | null>(null);
+    const [agentmailStatus, setAgentmailStatus] = useState('');
+
     useEffect(() => {
         api.get<Profile>('/api/profile').then(data => setProfile(data || {})).catch(() => {});
         api.get<{ apiKey?: string }>('/api/settings/gemini')
@@ -53,6 +57,9 @@ export default function SettingsPage() {
             .catch(() => {}).finally(() => setIsAgentLoading(false));
         api.get<{ url: string; isDefault: boolean }>('/api/settings/searxng')
             .then(data => { setCurrentSearxngUrl(data.url); setSearxngIsDefault(data.isDefault); })
+            .catch(() => {});
+        api.get<{ apiKey: string | null }>('/api/settings/agentmail')
+            .then(data => { if (data.apiKey) setAgentmailDisplay(data.apiKey); })
             .catch(() => {});
     }, []);
 
@@ -99,6 +106,20 @@ export default function SettingsPage() {
             setSearxngStatus('Saved!');
             setTimeout(() => setSearxngStatus(''), 3000);
         } catch { setSearxngStatus('Error saving.'); }
+    };
+
+    const handleAgentmailSave = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!agentmailKey) return;
+        setAgentmailStatus('Saving...');
+        try {
+            await api.post('/api/settings/agentmail', { apiKey: agentmailKey });
+            const data = await api.get<{ apiKey: string | null }>('/api/settings/agentmail');
+            if (data.apiKey) setAgentmailDisplay(data.apiKey);
+            setAgentmailKey('');
+            setAgentmailStatus('Saved!');
+            setTimeout(() => setAgentmailStatus(''), 3000);
+        } catch { setAgentmailStatus('Error saving.'); }
     };
 
     return (
@@ -338,6 +359,36 @@ export default function SettingsPage() {
                 )}
                 {searxngStatus && searxngStatus !== 'Saving...' && (
                     <p className={`text-sm font-medium mt-2 ${searxngStatus.includes('Error') ? 'text-red-500' : 'text-green-500'}`}>{searxngStatus}</p>
+                )}
+            </div>
+
+            {/* ── AGENTMAIL ── */}
+            <div className="bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6 shadow-sm">
+                <div className="flex items-center gap-2 mb-1">
+                    <h2 className="text-lg font-semibold">✉️ AgentMail API Key</h2>
+                    {agentmailDisplay && <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 font-medium">Configurat</span>}
+                </div>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+                    Necesară pentru Messenger Agent — trimite emailuri cu transcript din conversații.
+                    Obține cheia de la <span className="font-mono text-xs bg-gray-100 dark:bg-zinc-800 px-1 rounded">agentmail.to</span>.
+                </p>
+                {agentmailDisplay && (
+                    <div className="mb-4 p-3 bg-gray-50 dark:bg-zinc-800/50 rounded-xl border border-gray-100 dark:border-zinc-700 flex flex-col gap-1">
+                        <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Cheie activă</span>
+                        <span className="font-mono text-sm text-gray-700 dark:text-gray-300">{agentmailDisplay}</span>
+                    </div>
+                )}
+                <form onSubmit={handleAgentmailSave} className="flex gap-3">
+                    <input type="password" value={agentmailKey} onChange={e => setAgentmailKey(e.target.value)}
+                        placeholder="am_live_..."
+                        className="flex-1 p-3 rounded-xl border border-gray-300 dark:border-zinc-700 bg-transparent focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm font-mono" />
+                    <button type="submit" disabled={!agentmailKey || agentmailStatus === 'Saving...'}
+                        className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium py-3 px-5 rounded-xl transition-colors text-sm whitespace-nowrap">
+                        {agentmailStatus === 'Saving...' ? 'Saving...' : 'Save'}
+                    </button>
+                </form>
+                {agentmailStatus && agentmailStatus !== 'Saving...' && (
+                    <p className={`text-sm font-medium mt-2 ${agentmailStatus.includes('Error') ? 'text-red-500' : 'text-green-500'}`}>{agentmailStatus}</p>
                 )}
             </div>
 

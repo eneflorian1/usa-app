@@ -10,28 +10,60 @@ const TOOL_TAGS = [
     'CODING_LOOP_JSON', 'FILESYSTEM_JSON', 'SYSINFO_JSON', 'LAUNCHER_JSON',
     'TERMINAL_TASK_JSON', 'EMAIL_JSON', 'LINK_PROCESSOR_JSON', 'GIT_APP_JSON',
     'MEMORY_JSON', 'TASKS_QUERY_JSON', 'PAYMENT_JSON', 'SEARCH_JSON', 'NEGO_JSON',
-    'BOOK_APP_JSON'
+    'BOOK_APP_JSON', 'LEAD_INTEL_JSON', 'GEO_SEARCH_JSON', 'MESSENGER_JSON', 'FILE_AGENT_JSON',
+    'DOC_AGENT_JSON'
 ];
 
+// Try to extract JSON from both <TAG>...</TAG> and {{TAG}}...{{TAG}} formats.
+// Also handles Gemini typos in closing tags (e.g. </MESSENSER_JSON> vs </MESSENGER_JSON>).
 function extractJSON(text, tag) {
-    const regex = new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`);
-    const match = text.match(regex);
-    if (!match) return null;
-    try { return JSON.parse(match[1].trim()); } catch { return null; }
+    // Primary: exact <TAG>...</TAG>
+    const rx1 = new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`);
+    const m1 = text.match(rx1);
+    if (m1) { try { return JSON.parse(m1[1].trim()); } catch { return null; } }
+    // Fuzzy: opening tag found, closing tag may be misspelled — match any </...JSON>
+    const openIdx = text.indexOf(`<${tag}>`);
+    if (openIdx !== -1) {
+        const contentStart = openIdx + tag.length + 2;
+        const rest = text.slice(contentStart);
+        const closeMatch = rest.match(/<\/[A-Z_]+JSON>/);
+        if (closeMatch) {
+            const content = rest.slice(0, closeMatch.index).trim();
+            try { return JSON.parse(content); } catch { /* fall through */ }
+        }
+    }
+    // Fallback: {{TAG}}...{{TAG}} or {{TAG}}...{{/TAG}} (Gemini alternate format)
+    const rx2 = new RegExp(`\\{\\{${tag}\\}\\}([\\s\\S]*?)\\{\\{\\/?${tag}\\}\\}`);
+    const m2 = text.match(rx2);
+    if (m2) { try { return JSON.parse(m2[1].trim()); } catch { return null; } }
+    return null;
 }
 
 function extractAllJSON(text, tag) {
-    const regex = new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'g');
     const results = [];
+    // Primary: exact <TAG>...</TAG>
+    const rx1 = new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'g');
     let m;
-    while ((m = regex.exec(text)) !== null) {
-        try { results.push(JSON.parse(m[1].trim())); } catch { /* skip malformed */ }
+    while ((m = rx1.exec(text)) !== null) {
+        try { results.push(JSON.parse(m[1].trim())); } catch { /* skip */ }
+    }
+    if (results.length > 0) return results;
+    // Fuzzy: handle misspelled closing tags
+    const fuzzyRx = new RegExp(`<${tag}>([\\s\\S]*?)<\\/[A-Z_]+JSON>`, 'g');
+    while ((m = fuzzyRx.exec(text)) !== null) {
+        try { results.push(JSON.parse(m[1].trim())); } catch { /* skip */ }
+    }
+    if (results.length > 0) return results;
+    // Fallback: {{TAG}}...{{TAG}}
+    const rx2 = new RegExp(`\\{\\{${tag}\\}\\}([\\s\\S]*?)\\{\\{\\/?${tag}\\}\\}`, 'g');
+    while ((m = rx2.exec(text)) !== null) {
+        try { results.push(JSON.parse(m[1].trim())); } catch { /* skip */ }
     }
     return results;
 }
 
 // Tags that may appear multiple times per turn and must be aggregated
-const MULTI_TAGS = new Set(['MEMORY_JSON']);
+const MULTI_TAGS = new Set(['MEMORY_JSON', 'DOC_AGENT_JSON']);
 
 function extractAllTools(text) {
     const tools = {};
@@ -50,7 +82,12 @@ function extractAllTools(text) {
 function cleanAllTags(text) {
     let cleaned = text;
     for (const tag of TOOL_TAGS) {
+        // Exact closing tag
         cleaned = cleaned.replace(new RegExp(`<${tag}>[\\s\\S]*?<\\/${tag}>`, 'g'), '');
+        // Fuzzy closing tag (Gemini typos like </MESSENSER_JSON>)
+        cleaned = cleaned.replace(new RegExp(`<${tag}>[\\s\\S]*?<\\/[A-Z_]+JSON>`, 'g'), '');
+        // {{TAG}} format
+        cleaned = cleaned.replace(new RegExp(`\\{\\{${tag}\\}\\}[\\s\\S]*?\\{\\{\\/?${tag}\\}\\}`, 'g'), '');
     }
     return cleaned.trim();
 }
@@ -68,7 +105,8 @@ const INTENT_REGEX_MAP = [
     ['sysinfo', /sistem|cpu|ram|memorie|disk|spațiu|procese.*rulează|ip.*meu|uptime|network/],
     ['launcher', /deschide.*folder|deschide.*notepad|deschide.*chrome|deschide.*url|deschide.*aplicați|open.*folder/],
     ['web-agent', /mergi pe|deschide site|navigheaz|comand[aă].*pe|caut[aă].*pe.*web|completea.*formular|browser|web.*agent|automat.*web|wolt|uber.*eats|booking\.com|ryanair|emag|amazon/],
-    ['email', /\bemail\b|\bmail\b|trimite.*email|citește.*email|inbox|mesaj.*email|send.*email|compose.*email|check.*mail/i],
+    ['messenger', /trimite.*conversați|conversați.*pe|transcript.*pe|trimite.*transcript|trimite.*pe.*whatsapp|trimite.*pe.*email|forwardea|redirecționea|trimite.*asta|trimite.*discuția|trimite.*chat-ul|trimite.*un.*email|trimite.*email|trimite.*whatsapp|trimite.*mesaj|dă-mi.*email|dă-mi.*whatsapp|send.*email|send.*whatsapp/i],
+    ['email', /citește.*email|inbox.*email|ce.*emailuri|list.*inbox|crează.*inbox|mesaje.*primite/i],
     ['link-processor', /https?:\/\/[^\s]+.*(?:produs|product|anunț|olx|emag|amazon|ebay|negoci|preț|ofert|link|url)|analizea.*link|procesea.*link|uită-te.*la.*link|verifică.*link|ce.*(?:e|este|găsesc).*la.*link/i],
     ['terminal-task', /instale[aă]z[aă]|configurea|setup.*environment|verifică.*și.*repar|install.*pachet|npm.*install.*-g|verific[aă].*versiune|ce versiune|versiunea de|node.*version|npm.*version|python.*version|update[aă]z[aă].*pachet|dezinstale[aă]z[aă]|uninstall/i],
     ['local-exec', /execut[aă].*local|rulea.*pe pc|comand[aă].*local|local.*exec|pe pc|pe local|pe computer|deschide.*pe.*pc|rulează.*local/],
@@ -109,6 +147,11 @@ const TAG_TO_INTENT = {
     TASK_JSON: 'planner',
     GIT_APP_JSON: 'git-app',
     BOOK_APP_JSON: 'book-app',
+    LEAD_INTEL_JSON: 'nego',
+    GEO_SEARCH_JSON: 'nego',
+    MESSENGER_JSON: 'messenger',
+    FILE_AGENT_JSON: 'file-agent',
+    DOC_AGENT_JSON: 'doc-agent',
 };
 
 function detectIntent(text, tools) {
