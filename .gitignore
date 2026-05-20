@@ -24,3 +24,5 @@ VisionClaw-main/
 openclaw-main/
 android/
 NegoApp/
+.idea/
+*.iml
